@@ -215,6 +215,7 @@ struct rtpengine_table {
 	struct proc_dir_entry		*control;
 	struct proc_dir_entry		*list;
 	struct proc_dir_entry		*blist;
+	struct proc_dir_entry		*calls;
 
 	struct re_dest_addr_hash	dest_addr_hash;
 
@@ -419,6 +420,7 @@ static int table_create_proc(struct rtpengine_table *t, u_int32_t id) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 	proc_set_user(t->proc, proc_kuid, proc_kgid);
 #endif
+
 	t->status = proc_create_data("status", S_IFREG | S_IRUGO, t->proc, &proc_status_ops,
 		(void *) (unsigned long) id);
 	if (!t->status)
@@ -426,6 +428,7 @@ static int table_create_proc(struct rtpengine_table *t, u_int32_t id) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 	proc_set_user(t->status, proc_kuid, proc_kgid);
 #endif
+
 	t->control = proc_create_data("control", S_IFREG | S_IWUSR | S_IWGRP, t->proc,
 			&proc_control_ops, (void *) (unsigned long) id);
 	if (!t->control)
@@ -433,6 +436,7 @@ static int table_create_proc(struct rtpengine_table *t, u_int32_t id) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 	proc_set_user(t->control, proc_kuid, proc_kgid);
 #endif
+
 	t->list = proc_create_data("list", S_IFREG | S_IRUGO, t->proc,
 			&proc_list_ops, (void *) (unsigned long) id);
 	if (!t->list)
@@ -440,6 +444,7 @@ static int table_create_proc(struct rtpengine_table *t, u_int32_t id) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 	proc_set_user(t->list, proc_kuid, proc_kgid);
 #endif
+
 	t->blist = proc_create_data("blist", S_IFREG | S_IRUGO, t->proc,
 			&proc_blist_ops, (void *) (unsigned long) id);
 	if (!t->blist)
@@ -447,6 +452,18 @@ static int table_create_proc(struct rtpengine_table *t, u_int32_t id) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 	proc_set_user(t->blist, proc_kuid, proc_kgid);
 #endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
+	t->calls = create_proc_entry("calls", S_IFDIR | S_IRUGO | S_IXUGO, t->proc);
+#else
+	t->calls = proc_mkdir_mode("calls", S_IRUGO | S_IXUGO, t->proc);
+#endif
+	if (!t->calls)
+		return -1;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
+	proc_set_user(t->calls, proc_kuid, proc_kgid);
+#endif
+
 	return 0;
 }
 
@@ -546,6 +563,15 @@ static void clear_proc(struct proc_dir_entry **e) {
 
 
 
+static void clear_table_proc_files(struct rtpengine_table *t) {
+	clear_proc(&t->status);
+	clear_proc(&t->control);
+	clear_proc(&t->list);
+	clear_proc(&t->blist);
+	clear_proc(&t->calls);
+	clear_proc(&t->proc);
+}
+
 static void table_push(struct rtpengine_table *t) {
 	int i, j, k;
 	struct re_dest_addr *rda;
@@ -586,12 +612,7 @@ static void table_push(struct rtpengine_table *t) {
 	}
 
 
-	clear_proc(&t->status);
-	clear_proc(&t->control);
-	clear_proc(&t->list);
-	clear_proc(&t->blist);
-	clear_proc(&t->proc);
-
+	clear_table_proc_files(t);
 	kfree(t);
 
 	module_put(THIS_MODULE);
@@ -621,12 +642,7 @@ static int unlink_table(struct rtpengine_table *t) {
 	t->id = -1;
 	write_unlock_irqrestore(&table_lock, flags);
 
-	clear_proc(&t->status);
-	clear_proc(&t->control);
-	clear_proc(&t->list);
-	clear_proc(&t->blist);
-	clear_proc(&t->proc);
-
+	clear_table_proc_files(t);
 	table_push(t);
 
 	return 0;
