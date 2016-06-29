@@ -1903,19 +1903,19 @@ static ssize_t proc_control_write(struct file *file, const char __user *buf, siz
 			break;
 
 		case MMG_ADD:
-			err = table_new_target(t, &msg.target, 0);
+			err = table_new_target(t, &msg.u.target, 0);
 			if (err)
 				goto err;
 			break;
 
 		case MMG_DEL:
-			err = table_del_target(t, &msg.target.local);
+			err = table_del_target(t, &msg.u.target.local);
 			if (err)
 				goto err;
 			break;
 
 		case MMG_UPDATE:
-			err = table_new_target(t, &msg.target, 1);
+			err = table_new_target(t, &msg.u.target, 1);
 			if (err)
 				goto err;
 			break;

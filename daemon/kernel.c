@@ -75,7 +75,7 @@ int kernel_add_stream(int fd, struct rtpengine_target_info *mti, int update) {
 	int ret;
 
 	msg.cmd = update ? MMG_UPDATE : MMG_ADD;
-	msg.target = *mti;
+	msg.u.target = *mti;
 
 	ret = write(fd, &msg, sizeof(msg));
 	if (ret > 0)
@@ -92,7 +92,7 @@ int kernel_del_stream(int fd, const struct re_address *a) {
 
 	ZERO(msg);
 	msg.cmd = MMG_DEL;
-	msg.target.local = *a;
+	msg.u.target.local = *a;
 
 	ret = write(fd, &msg, sizeof(msg));
 	if (ret > 0)

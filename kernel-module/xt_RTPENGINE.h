@@ -107,7 +107,9 @@ struct rtpengine_message {
 		MMG_UPDATE
 	}				cmd;
 
-	struct rtpengine_target_info	target;
+	union {
+		struct rtpengine_target_info	target;
+	} u;
 };
 
 struct rtpengine_list_entry {
