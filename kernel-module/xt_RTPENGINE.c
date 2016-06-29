@@ -1898,23 +1898,23 @@ static ssize_t proc_control_write(struct file *file, const char __user *buf, siz
 		goto err;
 
 	switch (msg.cmd) {
-		case MMG_NOOP:
+		case REMG_NOOP:
 			DBG("noop.\n");
 			break;
 
-		case MMG_ADD:
+		case REMG_ADD:
 			err = table_new_target(t, &msg.u.target, 0);
 			if (err)
 				goto err;
 			break;
 
-		case MMG_DEL:
+		case REMG_DEL:
 			err = table_del_target(t, &msg.u.target.local);
 			if (err)
 				goto err;
 			break;
 
-		case MMG_UPDATE:
+		case REMG_UPDATE:
 			err = table_new_target(t, &msg.u.target, 1);
 			if (err)
 				goto err;

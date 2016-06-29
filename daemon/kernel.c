@@ -57,7 +57,7 @@ int kernel_open_table(unsigned int id) {
 		return -1;
 
 	ZERO(msg);
-	msg.cmd = MMG_NOOP;
+	msg.cmd = REMG_NOOP;
 	i = write(fd, &msg, sizeof(msg));
 	if (i <= 0)
 		goto fail;
@@ -74,7 +74,7 @@ int kernel_add_stream(int fd, struct rtpengine_target_info *mti, int update) {
 	struct rtpengine_message msg;
 	int ret;
 
-	msg.cmd = update ? MMG_UPDATE : MMG_ADD;
+	msg.cmd = update ? REMG_UPDATE : REMG_ADD;
 	msg.u.target = *mti;
 
 	ret = write(fd, &msg, sizeof(msg));
@@ -91,7 +91,7 @@ int kernel_del_stream(int fd, const struct re_address *a) {
 	int ret;
 
 	ZERO(msg);
-	msg.cmd = MMG_DEL;
+	msg.cmd = REMG_DEL;
 	msg.u.target.local = *a;
 
 	ret = write(fd, &msg, sizeof(msg));

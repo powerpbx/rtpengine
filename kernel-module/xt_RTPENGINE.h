@@ -101,10 +101,11 @@ struct rtpengine_target_info {
 
 struct rtpengine_message {
 	enum {
-		MMG_NOOP = 1,
-		MMG_ADD,
-		MMG_DEL,
-		MMG_UPDATE
+		REMG_NOOP = 1,
+		REMG_ADD,
+		REMG_DEL,
+		REMG_UPDATE,
+		__REMG_LAST
 	}				cmd;
 
 	union {
