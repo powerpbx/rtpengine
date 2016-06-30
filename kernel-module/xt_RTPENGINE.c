@@ -61,7 +61,7 @@ MODULE_LICENSE("GPL");
 			(x).u.u8[15],		\
 			(x).port
 
-#if 0
+#if 1
 #define DBG(x...) printk(KERN_DEBUG x)
 #else
 #define DBG(x...) ((void)0)
@@ -103,6 +103,7 @@ static rwlock_t table_lock;
 
 
 
+static ssize_t proc_control_read(struct file *, char __user *, size_t, loff_t *);
 static ssize_t proc_control_write(struct file *, const char __user *, size_t, loff_t *);
 static int proc_control_open(struct inode *, struct file *);
 static int proc_control_close(struct inode *, struct file *);
@@ -204,6 +205,13 @@ struct re_dest_addr_hash {
 	struct re_dest_addr		*addrs[256];
 };
 
+struct re_call {
+	atomic_t			refcnt;
+	struct rtpengine_call_info	info;
+
+	struct proc_dir_entry		*root;
+};
+
 struct rtpengine_table {
 	atomic_t			refcnt;
 	rwlock_t			target_lock;
@@ -220,6 +228,14 @@ struct rtpengine_table {
 	struct re_dest_addr_hash	dest_addr_hash;
 
 	unsigned int			num_targets;
+
+	/* calls: */
+	rwlock_t			calls_lock;
+
+	struct re_call			**calls_array;
+	unsigned int			calls_array_len;
+	unsigned long			*calls_used_bitfield;
+	/* XXX free list */
 };
 
 struct re_cipher {
@@ -270,6 +286,7 @@ struct rtp_parsed {
 
 
 static const struct file_operations proc_control_ops = {
+	.read			= proc_control_read,
 	.write			= proc_control_write,
 	.open			= proc_control_open,
 	.release		= proc_control_close,
@@ -389,6 +406,7 @@ static struct rtpengine_table *new_table(void) {
 
 	atomic_set(&t->refcnt, 1);
 	rwlock_init(&t->target_lock);
+	rwlock_init(&t->calls_lock);
 	t->id = -1;
 
 	return t;
@@ -399,6 +417,9 @@ static struct rtpengine_table *new_table(void) {
 
 static void table_hold(struct rtpengine_table *t) {
 	atomic_inc(&t->refcnt);
+}
+static void call_hold(struct re_call *c) {
+	atomic_inc(&c->refcnt);
 }
 
 
@@ -429,7 +450,7 @@ static int table_create_proc(struct rtpengine_table *t, u_int32_t id) {
 	proc_set_user(t->status, proc_kuid, proc_kgid);
 #endif
 
-	t->control = proc_create_data("control", S_IFREG | S_IWUSR | S_IWGRP, t->proc,
+	t->control = proc_create_data("control", S_IFREG | S_IWUSR | S_IWGRP | S_IRUSR | S_IRGRP, t->proc,
 			&proc_control_ops, (void *) (unsigned long) id);
 	if (!t->control)
 		return -1;
@@ -619,6 +640,20 @@ static void table_push(struct rtpengine_table *t) {
 }
 
 
+static void call_push(struct re_call *call) {
+	if (!call)
+		return;
+
+	if (!atomic_dec_and_test(&call->refcnt))
+		return;
+
+	DBG("Freeing call object\n");
+
+	clear_proc(&call->root);
+	kfree(call);
+}
+
+
 
 
 static int unlink_table(struct rtpengine_table *t) {
@@ -765,10 +800,10 @@ static inline unsigned char bitfield_next_slot(unsigned int slot) {
 	c += sizeof(unsigned long) * 8;
 	return c;
 }
-static inline unsigned int bitfield_slot(unsigned char i) {
+static inline unsigned int bitfield_slot(unsigned int i) {
 	return i / (sizeof(unsigned long) * 8);
 }
-static inline unsigned int bitfield_bit(unsigned char i) {
+static inline unsigned int bitfield_bit(unsigned int i) {
 	return i % (sizeof(unsigned long) * 8);
 }
 static inline void bitfield_set(struct re_bitfield *bf, unsigned char i) {
@@ -1893,6 +1928,203 @@ static int proc_control_close(struct inode *inode, struct file *file) {
 	return 0;
 }
 
+static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_info *info) {
+	int err;
+	struct re_call *call;
+	unsigned int u, idx;
+	unsigned long flags;
+	void *ptr;
+
+	/* validation */
+
+	if (info->call_id[0] == '\0')
+		return -EINVAL;
+	if (!memchr(info->call_id, '\0', sizeof(info->call_id)))
+		return -EINVAL;
+
+	DBG("Creating new call object\n");
+
+	/* allocate and initialize */
+
+	err = -ENOMEM;
+	call = kmalloc(sizeof(*call), GFP_KERNEL);
+	if (!call)
+		goto fail1;
+	memset(call, 0, sizeof(*call));
+
+	atomic_set(&call->refcnt, 1);
+
+	/* XXX create func for this */
+	/* XXX check collisions */
+	/* XXX proc creation will be slow with many directories, also bad concurrency */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
+	call->root = create_proc_entry(info->call_id, S_IFDIR | S_IRUGO | S_IXUGO, table->calls);
+#else
+	call->root = proc_mkdir_mode(info->call_id, S_IRUGO | S_IXUGO, table->calls);
+#endif
+	err = -EEXIST;
+	if (!call->root)
+		goto fail2;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
+	proc_set_user(call->root, proc_kuid, proc_kgid);
+#endif
+
+	/* find free idx / slot */
+
+	write_lock_irqsave(&table->calls_lock, flags);
+
+	for (idx = 0; idx < table->calls_array_len / (sizeof(unsigned long) * 8); idx++) {
+		if (~table->calls_used_bitfield[idx])
+			goto found;
+	}
+
+	/* nothing free found - extend array */
+
+	u = table->calls_array_len * 2;
+	if (unlikely(!u))
+		u = 256; /* XXX make configurable? */
+
+	DBG("extending array from %u to %u\n", table->calls_array_len, u);
+
+	ptr = krealloc(table->calls_array, sizeof(*table->calls_array) * u, GFP_KERNEL);
+	err = -ENOMEM;
+	if (!ptr)
+		goto fail2;
+	table->calls_array = ptr;
+	memset(&table->calls_array[table->calls_array_len], 0,
+			(u - table->calls_array_len) * sizeof(*table->calls_array));
+
+	ptr = krealloc(table->calls_used_bitfield, sizeof(*table->calls_used_bitfield) * u
+			/ (sizeof(unsigned long) * 8), GFP_KERNEL);
+	err = -ENOMEM;
+	if (!ptr)
+		goto fail2;
+	table->calls_used_bitfield = ptr;
+	memset(&table->calls_used_bitfield[table->calls_array_len / (sizeof(unsigned long) * 8)], 0,
+			(u - table->calls_array_len)
+			* (sizeof(*table->calls_used_bitfield) / (sizeof(unsigned long) * 8)));
+
+	idx = table->calls_array_len;
+	table->calls_array_len = u;
+
+found:
+	/* got our bitfield index, now look for the slot */
+
+	DBG("found unused slot at index %u\n", idx);
+
+	idx = idx * sizeof(unsigned long) * 8;
+	for (u = 0; u < sizeof(unsigned long) * 8; u++) {
+		if (!table->calls_array[idx + u])
+			goto found2;
+	}
+	panic("BUG while looking for unused index");
+
+found2:
+	idx += u;
+	DBG("unused idx is %u - inserting call object\n", idx);
+
+	table->calls_array[idx] = call; /* handing over our ref */
+	table->calls_used_bitfield[bitfield_slot(idx)] |= 1UL << bitfield_bit(idx);
+
+	info->call_idx = idx;
+	memcpy(&call->info, info, sizeof(call->info));
+
+	write_unlock_irqrestore(&table->calls_lock, flags);
+
+	return 0;
+
+fail2:
+	call_push(call);
+fail1:
+	return err;
+}
+
+static int table_del_call(struct rtpengine_table *table, unsigned int idx) {
+	unsigned long flags;
+	int err;
+	struct re_call *call = NULL;
+
+	write_lock_irqsave(&table->calls_lock, flags);
+
+	err = -ERANGE;
+	if (idx >= table->calls_array_len)
+		goto out;
+
+	call = table->calls_array[idx];
+	err = -ENOENT;
+	if (!call)
+		goto out;
+
+	table->calls_used_bitfield[bitfield_slot(idx)] &= ~(1UL << bitfield_bit(idx));
+	table->calls_array[idx] = NULL; /* steal ref */
+
+	err = 0;
+
+out:
+	write_unlock_irqrestore(&table->calls_lock, flags);
+
+	if (call)
+		call_push(call); /* XXX move this into locked code? */
+
+	return err;
+}
+
+
+
+
+
+static ssize_t proc_control_read(struct file *file, char __user *buf, size_t buflen, loff_t *off) {
+	struct inode *inode;
+	u_int32_t id;
+	struct rtpengine_table *t;
+	struct rtpengine_message msg;
+	int err;
+
+	if (buflen != sizeof(msg))
+		return -EIO;
+
+	inode = file->f_path.dentry->d_inode;
+	id = (u_int32_t) (unsigned long) PDE_DATA(inode);
+	t = get_table(id);
+	if (!t)
+		return -ENOENT;
+
+	/* unconventional? - we use read() as input + output */
+	err = -EFAULT;
+	if (copy_from_user(&msg, buf, sizeof(msg)))
+		goto err;
+
+	switch (msg.cmd) {
+		case REMG_ADD_CALL:
+			err = table_new_call(t, &msg.u.call);
+			if (err)
+				goto err;
+			break;
+
+		case REMG_DEL_CALL:
+			err = table_del_call(t, msg.u.call.call_idx);
+			if (err)
+				goto err;
+			break;
+
+		default:
+			printk(KERN_WARNING "xt_RTPENGINE unimplemented read op %u\n", msg.cmd);
+			err = -EINVAL;
+			goto err;
+	}
+
+	table_push(t);
+
+	if (copy_to_user(buf, &msg, sizeof(msg)))
+		return -EFAULT;
+
+	return buflen;
+
+err:
+	table_push(t);
+	return err;
+}
+
 static ssize_t proc_control_write(struct file *file, const char __user *buf, size_t buflen, loff_t *off) {
 	struct inode *inode;
 	u_int32_t id;
@@ -1937,7 +2169,7 @@ static ssize_t proc_control_write(struct file *file, const char __user *buf, siz
 			break;
 
 		default:
-			printk(KERN_WARNING "xt_RTPENGINE unimplemented op %u\n", msg.cmd);
+			printk(KERN_WARNING "xt_RTPENGINE unimplemented write op %u\n", msg.cmd);
 			err = -EINVAL;
 			goto err;
 	}

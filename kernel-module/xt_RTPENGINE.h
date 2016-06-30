@@ -99,17 +99,30 @@ struct rtpengine_target_info {
 					rtp_only:1;
 };
 
+struct rtpengine_call_info {
+	unsigned int			call_idx;
+	char				call_id[256];
+};
+
 struct rtpengine_message {
 	enum {
 		REMG_NOOP = 1,
+
+		/* target_info: */
 		REMG_ADD,
 		REMG_DEL,
 		REMG_UPDATE,
+
+		/* call_info: */
+		REMG_ADD_CALL,
+		REMG_DEL_CALL,
+
 		__REMG_LAST
 	}				cmd;
 
 	union {
 		struct rtpengine_target_info	target;
+		struct rtpengine_call_info	call;
 	} u;
 };
 
