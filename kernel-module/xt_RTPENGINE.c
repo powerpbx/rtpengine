@@ -205,11 +205,22 @@ struct re_dest_addr_hash {
 	struct re_dest_addr		*addrs[256];
 };
 
+struct re_auto_array {
+	rwlock_t			lock;
+
+	void				**array;
+	unsigned int			array_len;
+	unsigned long			*used_bitfield;
+	/* XXX free list */
+};
+
 struct re_call {
 	atomic_t			refcnt;
 	struct rtpengine_call_info	info;
 
 	struct proc_dir_entry		*root;
+
+	struct re_auto_array		streams_array;
 };
 
 struct rtpengine_table {
@@ -229,13 +240,7 @@ struct rtpengine_table {
 
 	unsigned int			num_targets;
 
-	/* calls: */
-	rwlock_t			calls_lock;
-
-	struct re_call			**calls_array;
-	unsigned int			calls_array_len;
-	unsigned long			*calls_used_bitfield;
-	/* XXX free list */
+	struct re_auto_array		calls_array;
 };
 
 struct re_cipher {
@@ -388,6 +393,11 @@ static const char *re_msm_strings[] = {
 
 
 
+/* must already be initialized to zero */
+static void auto_array_init(struct re_auto_array *a) {
+	rwlock_init(&a->lock);
+}
+
 static struct rtpengine_table *new_table(void) {
 	struct rtpengine_table *t;
 
@@ -406,7 +416,7 @@ static struct rtpengine_table *new_table(void) {
 
 	atomic_set(&t->refcnt, 1);
 	rwlock_init(&t->target_lock);
-	rwlock_init(&t->calls_lock);
+	auto_array_init(&t->calls_array);
 	t->id = -1;
 
 	return t;
@@ -426,64 +436,75 @@ static void call_hold(struct re_call *c) {
 
 
 
+static inline struct proc_dir_entry *proc_mkdir_user(const char *name, umode_t mode,
+		struct proc_dir_entry *parent)
+{
+	struct proc_dir_entry *ret;
+
+	/* XXX check collisions */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
+	ret = create_proc_entry(name, S_IFDIR | mode, parent);
+#else
+	ret = proc_mkdir_mode(name, mode, parent);
+#endif
+	if (!ret)
+		return NULL;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
+	proc_set_user(ret, proc_kuid, proc_kgid);
+#endif
+
+	return ret;
+}
+static inline struct proc_dir_entry *proc_create_user(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, const struct file_operations *ops,
+		void *ptr)
+{
+	struct proc_dir_entry *ret;
+
+	ret = proc_create_data(name, mode, parent, ops, ptr);
+	if (!ret)
+		return NULL;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
+	proc_set_user(ret, proc_kuid, proc_kgid);
+#endif
+
+	return ret;
+}
+
+
+
 static int table_create_proc(struct rtpengine_table *t, u_int32_t id) {
 	char num[10];
 
 	sprintf(num, "%u", id);
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
-	t->proc = create_proc_entry(num, S_IFDIR | S_IRUGO | S_IXUGO, my_proc_root);
-#else
-	t->proc = proc_mkdir_mode(num, S_IRUGO | S_IXUGO, my_proc_root);
-#endif
+	t->proc = proc_mkdir_user(num, S_IRUGO | S_IXUGO, my_proc_root);
 	if (!t->proc)
 		return -1;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
-	proc_set_user(t->proc, proc_kuid, proc_kgid);
-#endif
 
-	t->status = proc_create_data("status", S_IFREG | S_IRUGO, t->proc, &proc_status_ops,
+	t->status = proc_create_user("status", S_IFREG | S_IRUGO, t->proc, &proc_status_ops,
 		(void *) (unsigned long) id);
 	if (!t->status)
 		return -1;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
-	proc_set_user(t->status, proc_kuid, proc_kgid);
-#endif
 
-	t->control = proc_create_data("control", S_IFREG | S_IWUSR | S_IWGRP | S_IRUSR | S_IRGRP, t->proc,
+	t->control = proc_create_user("control", S_IFREG | S_IWUSR | S_IWGRP | S_IRUSR | S_IRGRP, t->proc,
 			&proc_control_ops, (void *) (unsigned long) id);
 	if (!t->control)
 		return -1;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
-	proc_set_user(t->control, proc_kuid, proc_kgid);
-#endif
 
-	t->list = proc_create_data("list", S_IFREG | S_IRUGO, t->proc,
+	t->list = proc_create_user("list", S_IFREG | S_IRUGO, t->proc,
 			&proc_list_ops, (void *) (unsigned long) id);
 	if (!t->list)
 		return -1;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
-	proc_set_user(t->list, proc_kuid, proc_kgid);
-#endif
 
-	t->blist = proc_create_data("blist", S_IFREG | S_IRUGO, t->proc,
+	t->blist = proc_create_user("blist", S_IFREG | S_IRUGO, t->proc,
 			&proc_blist_ops, (void *) (unsigned long) id);
 	if (!t->blist)
 		return -1;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
-	proc_set_user(t->blist, proc_kuid, proc_kgid);
-#endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
-	t->calls = create_proc_entry("calls", S_IFDIR | S_IRUGO | S_IXUGO, t->proc);
-#else
-	t->calls = proc_mkdir_mode("calls", S_IRUGO | S_IXUGO, t->proc);
-#endif
+	t->calls = proc_mkdir_user("calls", S_IRUGO | S_IXUGO, t->proc);
 	if (!t->calls)
 		return -1;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
-	proc_set_user(t->calls, proc_kuid, proc_kgid);
-#endif
 
 	return 0;
 }
@@ -806,30 +827,41 @@ static inline unsigned int bitfield_slot(unsigned int i) {
 static inline unsigned int bitfield_bit(unsigned int i) {
 	return i % (sizeof(unsigned long) * 8);
 }
-static inline void bitfield_set(struct re_bitfield *bf, unsigned char i) {
+static inline int bitfield_set(unsigned long *bf, unsigned int i) {
 	unsigned int b, m;
 	unsigned long k;
 
 	b = bitfield_slot(i);
 	m = bitfield_bit(i);
 	k = 1UL << m;
-	if ((bf->b[b] & k))
-		return;
-	bf->b[b] |= k;
-	bf->used++;
+	if ((bf[b] & k))
+		return 0;
+	bf[b] |= k;
+	return 1;
 }
-static inline void bitfield_clear(struct re_bitfield *bf, unsigned char i) {
+static inline int bitfield_clear(unsigned long *bf, unsigned int i) {
 	unsigned int b, m;
 	unsigned long k;
 
 	b = bitfield_slot(i);
 	m = bitfield_bit(i);
 	k = 1UL << m;
-	if (!(bf->b[b] & k))
-		return;
-	bf->b[b] &= ~k;
-	bf->used--;
+	if (!(bf[b] & k))
+		return 0;
+	bf[b] &= ~k;
+	return 1;
 }
+static inline void re_bitfield_set(struct re_bitfield *bf, unsigned char i) {
+	if (bitfield_set(bf->b, i))
+		bf->used++;
+}
+static inline void re_bitfield_clear(struct re_bitfield *bf, unsigned char i) {
+	if (bitfield_clear(bf->b, i))
+		bf->used--;
+}
+
+
+
 static inline struct rtpengine_target *find_next_target(struct rtpengine_table *t, int *addr_bucket,
 		int *port)
 {
@@ -1262,11 +1294,11 @@ static int table_del_target(struct rtpengine_table *t, const struct re_address *
 		goto out;
 
 	b->ports_lo[lo] = NULL;
-	bitfield_clear(&b->ports_lo_bf, lo);
+	re_bitfield_clear(&b->ports_lo_bf, lo);
 	t->num_targets--;
 	if (!b->ports_lo_bf.used) {
 		rda->ports_hi[hi] = NULL;
-		bitfield_clear(&rda->ports_hi_bf, hi);
+		re_bitfield_clear(&rda->ports_hi_bf, hi);
 	}
 	else
 		b = NULL;
@@ -1712,7 +1744,7 @@ retry:
 	}
 	
 	t->dest_addr_hash.addrs[rh_it] = rda;
-	bitfield_set(&t->dest_addr_hash.addrs_bf, rh_it);
+	re_bitfield_set(&t->dest_addr_hash.addrs_bf, rh_it);
 
 got_rda:
 	/* find or allocate re_bucket */
@@ -1736,7 +1768,7 @@ got_rda:
 
 	if (!rda->ports_hi[hi]) {
 		rda->ports_hi[hi] = b;
-		bitfield_set(&rda->ports_hi_bf, hi);
+		re_bitfield_set(&rda->ports_hi_bf, hi);
 	}
 	else {
 		ba = b;
@@ -1767,7 +1799,7 @@ got_bucket:
 		err = -EEXIST;
 		if (b->ports_lo[lo])
 			goto fail4;
-		bitfield_set(&b->ports_lo_bf, lo);
+		re_bitfield_set(&b->ports_lo_bf, lo);
 		t->num_targets++;
 	}
 
@@ -1928,12 +1960,70 @@ static int proc_control_close(struct inode *inode, struct file *file) {
 	return 0;
 }
 
+/* array must be locked */
+static int auto_array_find_free_index(struct re_auto_array *a) {
+	void *ptr;
+	unsigned int u, idx;
+
+	for (idx = 0; idx < a->array_len / (sizeof(unsigned long) * 8); idx++) {
+		if (~a->used_bitfield[idx])
+			goto found;
+	}
+
+	/* nothing free found - extend array */
+
+	u = a->array_len * 2;
+	if (unlikely(!u))
+		u = 256; /* XXX make configurable? */
+
+	DBG("extending array from %u to %u\n", a->array_len, u);
+
+	ptr = krealloc(a->array, sizeof(*a->array) * u, GFP_KERNEL);
+	if (!ptr)
+		return -ENOMEM;
+	a->array = ptr;
+	memset(&a->array[a->array_len], 0,
+			(u - a->array_len) * sizeof(*a->array));
+
+	ptr = krealloc(a->used_bitfield, sizeof(*a->used_bitfield) * u
+			/ (sizeof(unsigned long) * 8), GFP_KERNEL);
+	if (!ptr)
+		return -ENOMEM;
+	a->used_bitfield = ptr;
+	memset(&a->used_bitfield[a->array_len / (sizeof(unsigned long) * 8)], 0,
+			(u - a->array_len)
+			* (sizeof(*a->used_bitfield) / (sizeof(unsigned long) * 8)));
+
+	idx = a->array_len;
+	a->array_len = u;
+
+found:
+	/* got our bitfield index, now look for the slot */
+
+	DBG("found unused slot at index %u\n", idx);
+
+	idx = idx * sizeof(unsigned long) * 8;
+	for (u = 0; u < sizeof(unsigned long) * 8; u++) {
+		if (!a->array[idx + u])
+			goto found2;
+	}
+	panic("BUG while looking for unused index");
+
+found2:
+	idx += u;
+	DBG("unused idx is %u - inserting call object\n", idx);
+
+	return idx;
+}
+
+
+
+
 static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_info *info) {
 	int err;
 	struct re_call *call;
-	unsigned int u, idx;
+	unsigned int idx;
 	unsigned long flags;
-	void *ptr;
 
 	/* validation */
 
@@ -1954,85 +2044,29 @@ static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_i
 
 	atomic_set(&call->refcnt, 1);
 
-	/* XXX create func for this */
-	/* XXX check collisions */
 	/* XXX proc creation will be slow with many directories, also bad concurrency */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
-	call->root = create_proc_entry(info->call_id, S_IFDIR | S_IRUGO | S_IXUGO, table->calls);
-#else
-	call->root = proc_mkdir_mode(info->call_id, S_IRUGO | S_IXUGO, table->calls);
-#endif
-	err = -EEXIST;
+	call->root = proc_mkdir_user(info->call_id, S_IRUGO | S_IXUGO, table->calls);
+	err = -ENOMEM;
 	if (!call->root)
 		goto fail2;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
-	proc_set_user(call->root, proc_kuid, proc_kgid);
-#endif
 
-	/* find free idx / slot */
+	write_lock_irqsave(&table->calls_array.lock, flags);
 
-	write_lock_irqsave(&table->calls_lock, flags);
-
-	for (idx = 0; idx < table->calls_array_len / (sizeof(unsigned long) * 8); idx++) {
-		if (~table->calls_used_bitfield[idx])
-			goto found;
-	}
-
-	/* nothing free found - extend array */
-
-	u = table->calls_array_len * 2;
-	if (unlikely(!u))
-		u = 256; /* XXX make configurable? */
-
-	DBG("extending array from %u to %u\n", table->calls_array_len, u);
-
-	ptr = krealloc(table->calls_array, sizeof(*table->calls_array) * u, GFP_KERNEL);
-	err = -ENOMEM;
-	if (!ptr)
-		goto fail2;
-	table->calls_array = ptr;
-	memset(&table->calls_array[table->calls_array_len], 0,
-			(u - table->calls_array_len) * sizeof(*table->calls_array));
-
-	ptr = krealloc(table->calls_used_bitfield, sizeof(*table->calls_used_bitfield) * u
-			/ (sizeof(unsigned long) * 8), GFP_KERNEL);
-	err = -ENOMEM;
-	if (!ptr)
-		goto fail2;
-	table->calls_used_bitfield = ptr;
-	memset(&table->calls_used_bitfield[table->calls_array_len / (sizeof(unsigned long) * 8)], 0,
-			(u - table->calls_array_len)
-			* (sizeof(*table->calls_used_bitfield) / (sizeof(unsigned long) * 8)));
-
-	idx = table->calls_array_len;
-	table->calls_array_len = u;
-
-found:
-	/* got our bitfield index, now look for the slot */
-
-	DBG("found unused slot at index %u\n", idx);
-
-	idx = idx * sizeof(unsigned long) * 8;
-	for (u = 0; u < sizeof(unsigned long) * 8; u++) {
-		if (!table->calls_array[idx + u])
-			goto found2;
-	}
-	panic("BUG while looking for unused index");
-
-found2:
-	idx += u;
-	DBG("unused idx is %u - inserting call object\n", idx);
-
-	table->calls_array[idx] = call; /* handing over our ref */
-	table->calls_used_bitfield[bitfield_slot(idx)] |= 1UL << bitfield_bit(idx);
+	idx = err = auto_array_find_free_index(&table->calls_array);
+	if (err < 0)
+		goto fail3;
+	table->calls_array.array[idx] = call; /* handing over our ref */
+	bitfield_set(table->calls_array.used_bitfield, idx);
 
 	info->call_idx = idx;
 	memcpy(&call->info, info, sizeof(call->info));
 
-	write_unlock_irqrestore(&table->calls_lock, flags);
+	write_unlock_irqrestore(&table->calls_array.lock, flags);
 
 	return 0;
 
+fail3:
+	write_unlock_irqrestore(&table->calls_array.lock, flags);
 fail2:
 	call_push(call);
 fail1:
@@ -2044,29 +2078,35 @@ static int table_del_call(struct rtpengine_table *table, unsigned int idx) {
 	int err;
 	struct re_call *call = NULL;
 
-	write_lock_irqsave(&table->calls_lock, flags);
+	write_lock_irqsave(&table->calls_array.lock, flags);
 
 	err = -ERANGE;
-	if (idx >= table->calls_array_len)
+	if (idx >= table->calls_array.array_len)
 		goto out;
 
-	call = table->calls_array[idx];
+	call = table->calls_array.array[idx];
 	err = -ENOENT;
 	if (!call)
 		goto out;
 
-	table->calls_used_bitfield[bitfield_slot(idx)] &= ~(1UL << bitfield_bit(idx));
-	table->calls_array[idx] = NULL; /* steal ref */
+	bitfield_clear(table->calls_array.used_bitfield, idx);
+	table->calls_array.array[idx] = NULL; /* steal ref */
 
 	err = 0;
 
 out:
-	write_unlock_irqrestore(&table->calls_lock, flags);
+	write_unlock_irqrestore(&table->calls_array.lock, flags);
 
 	if (call)
 		call_push(call); /* XXX move this into locked code? */
 
 	return err;
+}
+
+
+
+static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stream_info *info) {
+	return 0;
 }
 
 
@@ -2106,6 +2146,13 @@ static ssize_t proc_control_read(struct file *file, char __user *buf, size_t buf
 			if (err)
 				goto err;
 			break;
+
+		case REMG_ADD_STREAM:
+			err = table_new_stream(t, &msg.u.stream);
+			if (err)
+				goto err;
+			break;
+
 
 		default:
 			printk(KERN_WARNING "xt_RTPENGINE unimplemented read op %u\n", msg.cmd);
@@ -3049,27 +3096,20 @@ static int __init init(void) {
 
 	ret = -ENOMEM;
 	err = "could not register /proc/ entries";
-	my_proc_root = proc_mkdir("rtpengine", NULL);
+	my_proc_root = proc_mkdir_user("rtpengine", S_IRUGO | S_IXUGO, NULL);
 	if (!my_proc_root)
 		goto fail;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
-	proc_set_user(my_proc_root, proc_kuid, proc_kgid);
-#endif
 	/* my_proc_root->owner = THIS_MODULE; */
 
-	proc_control = proc_create("control", S_IFREG | S_IWUSR | S_IWGRP, my_proc_root,
-			&proc_main_control_ops);
+	proc_control = proc_create_user("control", S_IFREG | S_IWUSR | S_IWGRP, my_proc_root,
+			&proc_main_control_ops, NULL);
 	if (!proc_control)
 		goto fail;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
-	proc_set_user(proc_control, proc_kuid, proc_kgid);
-#endif
-	proc_list = proc_create("list", S_IFREG | S_IRUGO, my_proc_root, &proc_main_list_ops);
+
+	proc_list = proc_create_user("list", S_IFREG | S_IRUGO, my_proc_root, &proc_main_list_ops, NULL);
 	if (!proc_list)
 		goto fail;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
-	proc_set_user(proc_list, proc_kuid, proc_kgid);
-#endif
+
 	err = "could not register xtables target";
 	ret = xt_register_targets(xt_rtpengine_regs, ARRAY_SIZE(xt_rtpengine_regs));
 	if (ret)
