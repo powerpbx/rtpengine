@@ -132,7 +132,7 @@ static void proc_main_list_stop(struct seq_file *, void *);
 static void *proc_main_list_next(struct seq_file *, void *, loff_t *);
 static int proc_main_list_show(struct seq_file *, void *);
 
-static void table_push(struct rtpengine_table *);
+static void table_put(struct rtpengine_table *);
 static struct rtpengine_target *get_target(struct rtpengine_table *, const struct re_address *);
 static int is_valid_address(const struct re_address *rea);
 
@@ -435,10 +435,10 @@ static struct rtpengine_table *new_table(void) {
 
 
 
-static void table_hold(struct rtpengine_table *t) {
+static void table_get(struct rtpengine_table *t) {
 	atomic_inc(&t->refcnt);
 }
-static void call_hold(struct re_call *c) {
+static void call_get(struct re_call *c) {
 	atomic_inc(&c->refcnt);
 }
 
@@ -538,12 +538,12 @@ static struct rtpengine_table *new_table_link(u_int32_t id) {
 	write_lock_irqsave(&table_lock, flags);
 	if (table[id]) {
 		write_unlock_irqrestore(&table_lock, flags);
-		table_push(t);
+		table_put(t);
 		printk(KERN_WARNING "xt_RTPENGINE duplicate ID %u\n", id);
 		return NULL;
 	}
 
-	table_hold(t);
+	table_get(t);
 	table[id] = t;
 	t->id = id;
 	write_unlock_irqrestore(&table_lock, flags);
@@ -570,7 +570,7 @@ static void free_crypto_context(struct re_crypto_context *c) {
 		crypto_free_shash(c->shash);
 }
 
-static void target_push(struct rtpengine_target *t) {
+static void target_put(struct rtpengine_target *t) {
 	if (!t)
 		return;
 
@@ -590,7 +590,7 @@ static void target_push(struct rtpengine_target *t) {
 
 
 
-static void target_hold(struct rtpengine_target *t) {
+static void target_get(struct rtpengine_target *t) {
 	atomic_inc(&t->refcnt);
 }
 
@@ -624,7 +624,7 @@ static void clear_table_proc_files(struct rtpengine_table *t) {
 	clear_proc(&t->proc);
 }
 
-static void table_push(struct rtpengine_table *t) {
+static void table_put(struct rtpengine_table *t) {
 	int i, j, k;
 	struct re_dest_addr *rda;
 	struct re_bucket *b;
@@ -651,7 +651,7 @@ static void table_push(struct rtpengine_table *t) {
 				if (!b->ports_lo[j])
 					continue;
 				b->ports_lo[j]->table = -1;
-				target_push(b->ports_lo[j]);
+				target_put(b->ports_lo[j]);
 				b->ports_lo[j] = NULL;
 			}
 
@@ -671,7 +671,7 @@ static void table_push(struct rtpengine_table *t) {
 }
 
 
-static void call_push(struct re_call *call) {
+static void call_put(struct re_call *call) {
 	if (!call)
 		return;
 
@@ -683,7 +683,7 @@ static void call_push(struct re_call *call) {
 	clear_proc(&call->root);
 	kfree(call);
 }
-static void stream_push(struct re_stream *stream) {
+static void stream_put(struct re_stream *stream) {
 	if (!stream)
 		return;
 
@@ -721,7 +721,7 @@ static int unlink_table(struct rtpengine_table *t) {
 	write_unlock_irqrestore(&table_lock, flags);
 
 	clear_table_proc_files(t);
-	table_push(t);
+	table_put(t);
 
 	return 0;
 }
@@ -739,7 +739,7 @@ static struct rtpengine_table *get_table(u_int32_t id) {
 	read_lock_irqsave(&table_lock, flags);
 	t = table[id];
 	if (t)
-		table_hold(t);
+		table_get(t);
 	read_unlock_irqrestore(&table_lock, flags);
 
 	return t;
@@ -775,7 +775,7 @@ static ssize_t proc_status(struct file *f, char __user *b, size_t l, loff_t *o) 
 	len += sprintf(buf + len, "Targets:     %u\n", t->num_targets);
 	read_unlock_irqrestore(&t->target_lock, flags);
 
-	table_push(t);
+	table_put(t);
 
 	if (copy_to_user(b, buf, len))
 		return -EFAULT;
@@ -828,7 +828,7 @@ static int proc_main_list_show(struct seq_file *f, void *v) {
 	struct rtpengine_table *g = v;
 
 	seq_printf(f, "%u\n", g->id);
-	table_push(g);
+	table_put(g);
 
 	return 0;
 }
@@ -952,7 +952,7 @@ static inline struct rtpengine_target *find_next_target(struct rtpengine_table *
 			goto next_lo;
 		}
 
-		target_hold(g);
+		target_get(g);
 		break;
 
 next_lo:
@@ -986,7 +986,7 @@ static int proc_blist_open(struct inode *i, struct file *f) {
 	if (!t)
 		return -ENOENT;
 
-	table_push(t);
+	table_put(t);
 
 	return 0;
 }
@@ -1000,7 +1000,7 @@ static int proc_blist_close(struct inode *i, struct file *f) {
 	if (!t)
 		return 0;
 
-	table_push(t);
+	table_put(t);
 
 	return 0;
 }
@@ -1057,17 +1057,17 @@ static ssize_t proc_blist_read(struct file *f, char __user *b, size_t l, loff_t 
 	op.target.encrypt.last_index = g->target.encrypt.last_index;
 	spin_unlock_irqrestore(&g->encrypt.lock, flags);
 
-	target_push(g);
+	target_put(g);
 
 	err = -EFAULT;
 	if (copy_to_user(b, &op, sizeof(op)))
 		goto err;
 
-	table_push(t);
+	table_put(t);
 	return l;
 
 err:
-	table_push(t);
+	table_put(t);
 	return err;
 }
 
@@ -1081,7 +1081,7 @@ static int proc_list_open(struct inode *i, struct file *f) {
 	t = get_table(id);
 	if (!t)
 		return -ENOENT;
-	table_push(t);
+	table_put(t);
 
 	err = seq_open(f, &proc_list_seq_ops);
 	if (err)
@@ -1119,7 +1119,7 @@ static void *proc_list_next(struct seq_file *f, void *v, loff_t *o) {	/* v is in
 	g = find_next_target(t, &addr_bucket, &port);
 
 	*o = (addr_bucket << 17) | port;
-	table_push(t);
+	table_put(t);
 
 	return g;
 }
@@ -1206,7 +1206,7 @@ static int proc_list_show(struct seq_file *f, void *v) {
 	if (g->target.dtls)
 		seq_printf(f, "    option: dtls\n");
 
-	target_push(g);
+	target_put(g);
 
 	return 0;
 }
@@ -1335,7 +1335,7 @@ out:
 	if (b)
 		kfree(b);
 
-	target_push(g);
+	target_put(g);
 
 	return 0;
 }
@@ -1832,7 +1832,7 @@ got_bucket:
 	if (ba)
 		kfree(ba);
 	if (og)
-		target_push(og);
+		target_put(og);
 
 	return 0;
 
@@ -1869,7 +1869,7 @@ static struct rtpengine_target *get_target(struct rtpengine_table *t, const stru
 	rda = find_dest_addr(&t->dest_addr_hash, local);
 	r = rda ? (rda->ports_hi[hi] ? rda->ports_hi[hi]->ports_lo[lo] : NULL) : NULL;
 	if (r)
-		target_hold(r);
+		target_get(r);
 	read_unlock_irqrestore(&t->target_lock, flags);
 
 	return r;
@@ -1912,7 +1912,7 @@ static ssize_t proc_main_control_write(struct file *file, const char __user *buf
 		t = new_table_link((u_int32_t) id);
 		if (!t)
 			return -EEXIST;
-		table_push(t);
+		table_put(t);
 		t = NULL;
 	}
 	else if (!strncmp(b, "del ", 4)) {
@@ -1925,7 +1925,7 @@ static ssize_t proc_main_control_write(struct file *file, const char __user *buf
 		if (!t)
 			return -ENOENT;
 		err = unlink_table(t);
-		table_push(t);
+		table_put(t);
 		t = NULL;
 		if (err)
 			return err;
@@ -1953,13 +1953,13 @@ static int proc_control_open(struct inode *inode, struct file *file) {
 	write_lock_irqsave(&table_lock, flags);
 	if (t->pid) {
 		write_unlock_irqrestore(&table_lock, flags);
-		table_push(t);
+		table_put(t);
 		return -EBUSY;
 	}
 	t->pid = current->tgid;
 	write_unlock_irqrestore(&table_lock, flags);
 
-	table_push(t);
+	table_put(t);
 	return 0;
 }
 
@@ -1977,7 +1977,7 @@ static int proc_control_close(struct inode *inode, struct file *file) {
 	t->pid = 0;
 	write_unlock_irqrestore(&table_lock, flags);
 
-	table_push(t);
+	table_put(t);
 
 	return 0;
 }
@@ -2058,7 +2058,7 @@ static struct re_call *get_call_lock(struct rtpengine_table *table, unsigned int
 
 	ret = get_call(table, idx);
 	if (ret)
-		call_hold(ret);
+		call_get(ret);
 
 	write_unlock_irqrestore(&table->calls_array.lock, flags);
 	return ret;
@@ -2123,7 +2123,7 @@ static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_i
 fail3:
 	write_unlock_irqrestore(&table->calls_array.lock, flags);
 fail2:
-	call_push(call);
+	call_put(call);
 	return err;
 }
 
@@ -2150,7 +2150,7 @@ out:
 	write_unlock_irqrestore(&table->calls_array.lock, flags);
 
 	if (call)
-		call_push(call); /* XXX move this into locked code? proc entry might collide */
+		call_put(call); /* XXX move this into locked code? proc entry might collide */
 
 	return err;
 }
@@ -2214,16 +2214,16 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 
 	write_unlock_irqrestore(&call->streams_array.lock, flags);
 
-	call_push(call);
+	call_put(call);
 
 	return 0;
 
 fail4:
 	write_unlock_irqrestore(&call->streams_array.lock, flags);
 fail3:
-	stream_push(stream);
+	stream_put(stream);
 fail2:
-	call_push(call);
+	call_put(call);
 	return err;
 }
 
@@ -2254,9 +2254,9 @@ out:
 	write_unlock_irqrestore(&call->streams_array.lock, flags);
 
 	if (stream)
-		stream_push(stream); /* XXX move this into locked code? */
+		stream_put(stream); /* XXX move this into locked code? */
 
-	call_push(call);
+	call_put(call);
 
 	return err;
 }
@@ -2317,7 +2317,7 @@ static ssize_t proc_control_read(struct file *file, char __user *buf, size_t buf
 			goto err;
 	}
 
-	table_push(t);
+	table_put(t);
 
 	if (copy_to_user(buf, &msg, sizeof(msg)))
 		return -EFAULT;
@@ -2325,7 +2325,7 @@ static ssize_t proc_control_read(struct file *file, char __user *buf, size_t buf
 	return buflen;
 
 err:
-	table_push(t);
+	table_put(t);
 	return err;
 }
 
@@ -2378,12 +2378,12 @@ static ssize_t proc_control_write(struct file *file, const char __user *buf, siz
 			goto err;
 	}
 
-	table_push(t);
+	table_put(t);
 
 	return buflen;
 
 err:
-	table_push(t);
+	table_put(t);
 	return err;
 }
 
@@ -3080,18 +3080,18 @@ out:
 		atomic64_inc(&g->stats.errors);
 #endif
 
-	target_push(g);
-	table_push(t);
+	target_put(g);
+	table_put(t);
 
 	return NF_DROP;
 
 skip_error:
 	atomic64_inc(&g->stats.errors);
 skip1:
-	target_push(g);
+	target_put(g);
 skip2:
 	kfree_skb(skb);
-	table_push(t);
+	table_put(t);
 	return XT_CONTINUE;
 }
 
@@ -3136,7 +3136,7 @@ static unsigned int rtpengine4(struct sk_buff *oskb, const struct xt_action_para
 skip2:
 	kfree_skb(skb);
 skip3:
-	table_push(t);
+	table_put(t);
 skip:
 	return XT_CONTINUE;
 }
@@ -3181,7 +3181,7 @@ static unsigned int rtpengine6(struct sk_buff *oskb, const struct xt_action_para
 skip2:
 	kfree_skb(skb);
 skip3:
-	table_push(t);
+	table_put(t);
 skip:
 	return XT_CONTINUE;
 }
