@@ -223,6 +223,13 @@ struct re_call {
 	struct re_auto_array		streams_array;
 };
 
+struct re_stream {
+	atomic_t			refcnt;
+	struct rtpengine_stream_info	info;
+
+	struct proc_dir_entry		*file;
+};
+
 struct rtpengine_table {
 	atomic_t			refcnt;
 	rwlock_t			target_lock;
@@ -339,6 +346,9 @@ static const struct seq_operations proc_main_list_seq_ops = {
 	.next			= proc_main_list_next,
 	.stop			= proc_main_list_stop,
 	.show			= proc_main_list_show,
+};
+
+static const struct file_operations proc_stream_ops = {
 };
 
 static const struct re_cipher re_ciphers[] = {
@@ -672,6 +682,18 @@ static void call_push(struct re_call *call) {
 
 	clear_proc(&call->root);
 	kfree(call);
+}
+static void stream_push(struct re_stream *stream) {
+	if (!stream)
+		return;
+
+	if (!atomic_dec_and_test(&stream->refcnt))
+		return;
+
+	DBG("Freeing stream object\n");
+
+	clear_proc(&stream->file);
+	kfree(stream);
 }
 
 
@@ -2019,6 +2041,40 @@ found2:
 
 
 
+
+/* lock must be held */
+static struct re_call *get_call(struct rtpengine_table *table, unsigned int idx) {
+	if (idx >= table->calls_array.array_len)
+		return NULL;
+
+	return table->calls_array.array[idx];
+}
+/* handles the locking and reffing */
+static struct re_call *get_call_lock(struct rtpengine_table *table, unsigned int idx) {
+	struct re_call *ret;
+	unsigned long flags;
+
+	write_lock_irqsave(&table->calls_array.lock, flags);
+
+	ret = get_call(table, idx);
+	if (ret)
+		call_hold(ret);
+
+	write_unlock_irqrestore(&table->calls_array.lock, flags);
+	return ret;
+}
+/* lock must be held */
+static struct re_stream *get_stream(struct re_call *call, unsigned int idx) {
+	if (idx >= call->streams_array.array_len)
+		return NULL;
+
+	return call->streams_array.array[idx];
+}
+
+
+
+
+
 static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_info *info) {
 	int err;
 	struct re_call *call;
@@ -2036,10 +2092,9 @@ static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_i
 
 	/* allocate and initialize */
 
-	err = -ENOMEM;
 	call = kmalloc(sizeof(*call), GFP_KERNEL);
 	if (!call)
-		goto fail1;
+		return -ENOMEM;
 	memset(call, 0, sizeof(*call));
 
 	atomic_set(&call->refcnt, 1);
@@ -2069,7 +2124,6 @@ fail3:
 	write_unlock_irqrestore(&table->calls_array.lock, flags);
 fail2:
 	call_push(call);
-fail1:
 	return err;
 }
 
@@ -2080,11 +2134,7 @@ static int table_del_call(struct rtpengine_table *table, unsigned int idx) {
 
 	write_lock_irqsave(&table->calls_array.lock, flags);
 
-	err = -ERANGE;
-	if (idx >= table->calls_array.array_len)
-		goto out;
-
-	call = table->calls_array.array[idx];
+	call = get_call(table, idx);
 	err = -ENOENT;
 	if (!call)
 		goto out;
@@ -2092,21 +2142,123 @@ static int table_del_call(struct rtpengine_table *table, unsigned int idx) {
 	bitfield_clear(table->calls_array.used_bitfield, idx);
 	table->calls_array.array[idx] = NULL; /* steal ref */
 
+	/* XXX delete sub-items */
+
 	err = 0;
 
 out:
 	write_unlock_irqrestore(&table->calls_array.lock, flags);
 
 	if (call)
-		call_push(call); /* XXX move this into locked code? */
+		call_push(call); /* XXX move this into locked code? proc entry might collide */
 
 	return err;
 }
 
 
 
+
+
 static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stream_info *info) {
+	int err;
+	struct re_call *call;
+	struct re_stream *stream;
+	unsigned long flags;
+	unsigned int idx;
+
+	/* validation */
+
+	if (info->stream_name[0] == '\0')
+		return -EINVAL;
+	if (!memchr(info->stream_name, '\0', sizeof(info->stream_name)))
+		return -EINVAL;
+
+	/* get call object */
+
+	call = get_call_lock(table, info->call_idx);
+	if (!call)
+		return -ENOENT;
+
+	DBG("Creating new stream object\n");
+
+	/* allocate and initialize */
+
+	err = -ENOMEM;
+	stream = kmalloc(sizeof(*stream), GFP_KERNEL);
+	if (!stream)
+		goto fail2;
+	memset(stream, 0, sizeof(*stream));
+
+	atomic_set(&stream->refcnt, 1);
+
+	stream->file = proc_create_user(info->stream_name, S_IFREG | S_IRUSR | S_IRGRP, call->root,
+			&proc_stream_ops, NULL);
+	err = -ENOMEM;
+	if (!stream->file)
+		goto fail3;
+
+	/* add into array */
+
+	write_lock_irqsave(&call->streams_array.lock, flags);
+
+	idx = err = auto_array_find_free_index(&call->streams_array);
+	if (err < 0)
+		goto fail4;
+	call->streams_array.array[idx] = stream; /* handing over our ref */
+	bitfield_set(call->streams_array.used_bitfield, idx);
+
+	/* copy info */
+
+	info->stream_idx = idx;
+	memcpy(&stream->info, info, sizeof(call->info));
+
+	write_unlock_irqrestore(&call->streams_array.lock, flags);
+
+	call_push(call);
+
 	return 0;
+
+fail4:
+	write_unlock_irqrestore(&call->streams_array.lock, flags);
+fail3:
+	stream_push(stream);
+fail2:
+	call_push(call);
+	return err;
+}
+
+static int table_del_stream(struct rtpengine_table *table, const struct rtpengine_stream_info *info) {
+	unsigned long flags;
+	int err;
+	struct re_call *call;
+	struct re_stream *stream;
+
+	call = get_call_lock(table, info->call_idx);
+	err = -ENOENT;
+	if (!call)
+		return -ENOENT;
+
+	write_lock_irqsave(&call->streams_array.lock, flags);
+
+	stream = get_stream(call, info->stream_idx);
+	err = -ENOENT;
+	if (!stream)
+		goto out;
+
+	bitfield_clear(call->streams_array.used_bitfield, info->stream_idx);
+	call->streams_array.array[info->stream_idx] = NULL; /* steal ref */
+
+	err = 0;
+
+out:
+	write_unlock_irqrestore(&call->streams_array.lock, flags);
+
+	if (stream)
+		stream_push(stream); /* XXX move this into locked code? */
+
+	call_push(call);
+
+	return err;
 }
 
 
@@ -2153,6 +2305,11 @@ static ssize_t proc_control_read(struct file *file, char __user *buf, size_t buf
 				goto err;
 			break;
 
+		case REMG_DEL_STREAM:
+			err = table_del_stream(t, &msg.u.stream);
+			if (err)
+				goto err;
+			break;
 
 		default:
 			printk(KERN_WARNING "xt_RTPENGINE unimplemented read op %u\n", msg.cmd);
