@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 
-my %cmds = (noop => 1, add_call => 5, del_call => 6, add_stream => 7, del_stream => 8);
+my %cmds = (noop => 1, add_call => 5, del_call => 6, add_stream => 7, del_stream => 8, packet => 9);
 
 open(F, "+> /proc/rtpengine/0/control") or die;
 {
@@ -42,7 +42,24 @@ sub rtpengine_message_stream {
 	return $ret;
 }
 
-my $sleep = 5;
+sub rtpengine_message_packet {
+	my ($cmd, $call_idx, $stream_idx, $data) = @_;
+
+	my $ret = '';
+
+	# amd64 alignment
+	$ret .= pack('VV VV', $cmds{$cmd}, 0, $call_idx, $stream_idx);
+
+	while (length($ret) < 792) {
+		$ret .= pack('v', 0);
+	}
+
+	$ret .= $data;
+
+	return $ret;
+}
+
+my $sleep = 1;
 
 print("creating one call\n");
 
@@ -104,10 +121,19 @@ print("index is $sidx3\n");
 
 sleep($sleep);
 
+print("delivering a packet\n");
+
+$msg = rtpengine_message_packet('packet', $idx2, $sidx3, 'packet data bla bla');
+$ret = syswrite(F, $msg) // '-';
+#print("reply: " . unpack("H*", $msg) . "\n");
+print("ret = $ret, code = $!\n");
+
+sleep($sleep);
+
 print("deleting stream\n");
 
 $msg = rtpengine_message_stream('del_stream', $idx1, $sidx1, '');
-$ret = sysread(F, $msg, length($msg)) // '-';
+$ret = syswrite(F, $msg) // '-';
 #print("ret = $ret, code = $!, reply: " . unpack("H*", $msg) . "\n");
 print("ret = $ret, code = $!\n");
 
@@ -116,7 +142,7 @@ sleep($sleep);
 print("deleting stream\n");
 
 $msg = rtpengine_message_stream('del_stream', $idx1, $sidx2, '');
-$ret = sysread(F, $msg, length($msg)) // '-';
+$ret = syswrite(F, $msg) // '-';
 #print("ret = $ret, code = $!, reply: " . unpack("H*", $msg) . "\n");
 print("ret = $ret, code = $!\n");
 
@@ -125,7 +151,7 @@ sleep($sleep);
 print("deleting stream\n");
 
 $msg = rtpengine_message_stream('del_stream', $idx2, $sidx3, '');
-$ret = sysread(F, $msg, length($msg)) // '-';
+$ret = syswrite(F, $msg) // '-';
 #print("ret = $ret, code = $!, reply: " . unpack("H*", $msg) . "\n");
 print("ret = $ret, code = $!\n");
 
@@ -134,7 +160,7 @@ sleep($sleep);
 print("deleting call\n");
 
 $msg = rtpengine_message_call('del_call', $idx1, '');
-$ret = sysread(F, $msg, length($msg)) // '-';
+$ret = syswrite(F, $msg) // '-';
 #print("ret = $ret, code = $!, reply: " . unpack("H*", $msg) . "\n");
 print("ret = $ret, code = $!\n");
 
@@ -143,7 +169,7 @@ sleep($sleep);
 print("deleting call\n");
 
 $msg = rtpengine_message_call('del_call', $idx2, '');
-$ret = sysread(F, $msg, length($msg)) // '-';
+$ret = syswrite(F, $msg) // '-';
 #print("ret = $ret, code = $!, reply: " . unpack("H*", $msg) . "\n");
 print("ret = $ret, code = $!\n");
 

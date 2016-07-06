@@ -110,6 +110,11 @@ struct rtpengine_stream_info {
 	char				stream_name[256];
 };
 
+struct rtpengine_packet_info {
+	unsigned int			call_idx;
+	unsigned int			stream_idx;
+};
+
 struct rtpengine_message {
 	enum {
 		REMG_NOOP = 1,
@@ -127,6 +132,9 @@ struct rtpengine_message {
 		REMG_ADD_STREAM,
 		REMG_DEL_STREAM,
 
+		/* packet_info: */
+		REMG_PACKET,
+
 		__REMG_LAST
 	}				cmd;
 
@@ -134,7 +142,10 @@ struct rtpengine_message {
 		struct rtpengine_target_info	target;
 		struct rtpengine_call_info	call;
 		struct rtpengine_stream_info	stream;
+		struct rtpengine_packet_info	packet;
 	} u;
+
+	unsigned char			data[];
 };
 
 struct rtpengine_list_entry {

@@ -448,12 +448,7 @@ static struct rtpengine_table *new_table(void) {
 
 
 
-static void table_get(struct rtpengine_table *t) {
-	atomic_inc(&t->refcnt);
-}
-static void call_get(struct re_call *c) {
-	atomic_inc(&c->refcnt);
-}
+#define ref_get(o) atomic_inc(&(o)->refcnt)
 
 
 
@@ -556,7 +551,7 @@ static struct rtpengine_table *new_table_link(u_int32_t id) {
 		return NULL;
 	}
 
-	table_get(t);
+	ref_get(t);
 	table[id] = t;
 	t->id = id;
 	write_unlock_irqrestore(&table_lock, flags);
@@ -794,7 +789,7 @@ static struct rtpengine_table *get_table(u_int32_t id) {
 	read_lock_irqsave(&table_lock, flags);
 	t = table[id];
 	if (t)
-		table_get(t);
+		ref_get(t);
 	read_unlock_irqrestore(&table_lock, flags);
 
 	return t;
@@ -2113,7 +2108,7 @@ static struct re_call *get_call_lock(struct rtpengine_table *table, unsigned int
 
 	ret = get_call(table, idx);
 	if (ret)
-		call_get(ret);
+		ref_get(ret);
 
 	write_unlock_irqrestore(&table->calls_array.lock, flags);
 	return ret;
@@ -2124,6 +2119,20 @@ static struct re_stream *get_stream(struct re_call *call, unsigned int idx) {
 		return NULL;
 
 	return call->streams_array.array[idx];
+}
+/* handles the locking and reffing */
+static struct re_stream *get_stream_lock(struct re_call *call, unsigned int idx) {
+	struct re_stream *ret;
+	unsigned long flags;
+
+	write_lock_irqsave(&call->streams_array.lock, flags);
+
+	ret = get_stream(call, idx);
+	if (ret)
+		ref_get(ret);
+
+	write_unlock_irqrestore(&call->streams_array.lock, flags);
+	return ret;
 }
 
 
@@ -2319,106 +2328,147 @@ out:
 
 
 
+static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packet_info *info,
+		const unsigned char *data, unsigned int len)
+{
+	struct re_call *call;
+	struct re_stream *stream;
+	int err;
 
-static inline ssize_t proc_control_read_write(struct file *file, char __user *buf, size_t buflen, loff_t *off,
+	DBG("received %u bytes of data\n", len);
+
+	call = get_call_lock(t, info->call_idx);
+	if (!call)
+		return -ENOENT;
+
+	err = -ENOENT;
+	stream = get_stream_lock(call, info->stream_idx);
+	if (!stream)
+		goto out;
+
+	DBG("data for stream %s\n", stream->info.stream_name);
+
+	stream_put(stream);
+	err = 0;
+out:
+	call_put(call);
+	return err;
+}
+
+
+
+
+
+static inline ssize_t proc_control_read_write(struct file *file, char __user *ubuf, size_t buflen, loff_t *off,
 		int writeable)
 {
 	struct inode *inode;
 	u_int32_t id;
 	struct rtpengine_table *t;
-	struct rtpengine_message msg;
+	struct rtpengine_message msgbuf;
+	struct rtpengine_message *msg;
 	int err;
 
-	if (buflen != sizeof(msg))
+	if (buflen < sizeof(*msg))
 		return -EIO;
+	if (buflen == sizeof(*msg))
+		msg = &msgbuf;
+	else { /* > */
+		msg = kmalloc(buflen, GFP_KERNEL);
+		if (!msg)
+			return -ENOMEM;
+	}
 
 	inode = file->f_path.dentry->d_inode;
 	id = (u_int32_t) (unsigned long) PDE_DATA(inode);
 	t = get_table(id);
+	err = -ENOENT;
 	if (!t)
-		return -ENOENT;
+		goto out;
 
 	err = -EFAULT;
-	if (copy_from_user(&msg, buf, sizeof(msg)))
+	if (copy_from_user(msg, ubuf, buflen))
 		goto err;
 
-	switch (msg.cmd) {
+	err = 0;
+
+	switch (msg->cmd) {
 		case REMG_NOOP:
 			DBG("noop.\n");
 			break;
 
 		case REMG_ADD:
-			err = table_new_target(t, &msg.u.target, 0);
-			if (err)
-				goto err;
+			err = table_new_target(t, &msg->u.target, 0);
 			break;
 
 		case REMG_DEL:
-			err = table_del_target(t, &msg.u.target.local);
-			if (err)
-				goto err;
+			err = table_del_target(t, &msg->u.target.local);
 			break;
 
 		case REMG_UPDATE:
-			err = table_new_target(t, &msg.u.target, 1);
-			if (err)
-				goto err;
+			err = table_new_target(t, &msg->u.target, 1);
 			break;
 
 		case REMG_ADD_CALL:
 			err = -EINVAL;
 			if (!writeable)
 				goto err;
-			err = table_new_call(t, &msg.u.call);
-			if (err)
-				goto err;
+			err = table_new_call(t, &msg->u.call);
 			break;
 
 		case REMG_DEL_CALL:
-			err = table_del_call(t, msg.u.call.call_idx);
-			if (err)
-				goto err;
+			err = table_del_call(t, msg->u.call.call_idx);
 			break;
 
 		case REMG_ADD_STREAM:
 			err = -EINVAL;
 			if (!writeable)
 				goto err;
-			err = table_new_stream(t, &msg.u.stream);
-			if (err)
-				goto err;
+			err = table_new_stream(t, &msg->u.stream);
 			break;
 
 		case REMG_DEL_STREAM:
-			err = table_del_stream(t, &msg.u.stream);
-			if (err)
-				goto err;
+			err = table_del_stream(t, &msg->u.stream);
+			break;
+
+		case REMG_PACKET:
+			err = stream_packet(t, &msg->u.packet, msg->data, buflen - sizeof(*msg));
 			break;
 
 		default:
-			printk(KERN_WARNING "xt_RTPENGINE unimplemented op %u\n", msg.cmd);
+			printk(KERN_WARNING "xt_RTPENGINE unimplemented op %u\n", msg->cmd);
 			err = -EINVAL;
-			goto err;
+			break;
 	}
 
 	table_put(t);
 
+	if (err)
+		goto out;
+
 	if (writeable) {
-		if (copy_to_user(buf, &msg, sizeof(msg)))
-			return -EFAULT;
+		err = -EFAULT;
+		if (copy_to_user(ubuf, msg, sizeof(*msg)))
+			goto out;
 	}
+
+	if (msg != &msgbuf)
+		kfree(msg);
 
 	return buflen;
 
 err:
 	table_put(t);
+out:
+	if (msg != &msgbuf)
+		kfree(msg);
 	return err;
 }
-static ssize_t proc_control_write(struct file *file, const char __user *buf, size_t buflen, loff_t *off) {
-	return proc_control_read_write(file, (char __user *) buf, buflen, off, 0);
+static ssize_t proc_control_write(struct file *file, const char __user *ubuf, size_t buflen, loff_t *off) {
+	return proc_control_read_write(file, (char __user *) ubuf, buflen, off, 0);
 }
-static ssize_t proc_control_read(struct file *file, char __user *buf, size_t buflen, loff_t *off) {
-	return proc_control_read_write(file, buf, buflen, off, 1);
+static ssize_t proc_control_read(struct file *file, char __user *ubuf, size_t buflen, loff_t *off) {
+	return proc_control_read_write(file, ubuf, buflen, off, 1);
 }
 
 
