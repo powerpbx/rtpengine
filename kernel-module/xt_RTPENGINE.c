@@ -80,6 +80,9 @@ struct re_hmac;
 struct re_cipher;
 struct rtp_parsed;
 struct re_crypto_context;
+struct re_auto_array;
+struct re_call;
+struct re_stream;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 kuid_t proc_kuid;
@@ -141,6 +144,9 @@ static int srtp_encrypt_aes_cm(struct re_crypto_context *, struct rtpengine_srtp
 		struct rtp_parsed *, u_int64_t);
 static int srtp_encrypt_aes_f8(struct re_crypto_context *, struct rtpengine_srtp *,
 		struct rtp_parsed *, u_int64_t);
+
+static void auto_array_iterate(struct re_auto_array *a, int (*func)(void *, unsigned int));
+static void call_put(struct re_call *call);
 
 
 
@@ -408,6 +414,13 @@ static void auto_array_init(struct re_auto_array *a) {
 	rwlock_init(&a->lock);
 }
 
+static void auto_array_free(struct re_auto_array *a) {
+	if (a->array)
+		kfree(a->array);
+	if (a->used_bitfield)
+		kfree(a->used_bitfield);
+}
+
 static struct rtpengine_table *new_table(void) {
 	struct rtpengine_table *t;
 
@@ -623,6 +636,10 @@ static void clear_table_proc_files(struct rtpengine_table *t) {
 	clear_proc(&t->calls);
 	clear_proc(&t->proc);
 }
+static int iter_call_put(void *p, unsigned int idx) {
+	call_put(p); /* no need to zero entry in array - will be freed anyway */
+	return 0;
+}
 
 static void table_put(struct rtpengine_table *t) {
 	int i, j, k;
@@ -664,25 +681,45 @@ static void table_put(struct rtpengine_table *t) {
 	}
 
 
+	auto_array_iterate(&t->calls_array, iter_call_put);
 	clear_table_proc_files(t);
+	auto_array_free(&t->calls_array);
 	kfree(t);
 
 	module_put(THIS_MODULE);
 }
 
 
-static void call_put(struct re_call *call) {
-	if (!call)
-		return;
 
-	if (!atomic_dec_and_test(&call->refcnt))
-		return;
+static void auto_array_iterate(struct re_auto_array *a, int (*func)(void *, unsigned int)) {
+	unsigned long flags;
+	unsigned int slot, idx;
+	void *ptr;
+	int ret;
 
-	DBG("Freeing call object\n");
+	write_lock_irqsave(&a->lock, flags);
 
-	clear_proc(&call->root);
-	kfree(call);
+	for (slot = 0; slot < a->array_len / (sizeof(unsigned long) * 8); slot++) {
+		if (!a->used_bitfield[slot])
+			continue;
+
+		for (idx = slot * sizeof(unsigned long) * 8; idx < (slot + 1) * sizeof(unsigned long) * 8;
+				idx++)
+		{
+			ptr = a->array[idx];
+			if (!ptr)
+				continue;
+			ret = func(ptr, idx);
+			if (ret)
+				goto done;
+		}
+	}
+
+done:
+	write_unlock_irqrestore(&a->lock, flags);
 }
+
+
 static void stream_put(struct re_stream *stream) {
 	if (!stream)
 		return;
@@ -694,6 +731,24 @@ static void stream_put(struct re_stream *stream) {
 
 	clear_proc(&stream->file);
 	kfree(stream);
+}
+static int iter_stream_put(void *p, unsigned int idx) {
+	stream_put(p); /* no need to zero entry in array - will be freed anyway */
+	return 0;
+}
+static void call_put(struct re_call *call) {
+	if (!call)
+		return;
+
+	if (!atomic_dec_and_test(&call->refcnt))
+		return;
+
+	DBG("Freeing call object\n");
+
+	auto_array_iterate(&call->streams_array, iter_stream_put);
+	clear_proc(&call->root);
+	auto_array_free(&call->streams_array);
+	kfree(call);
 }
 
 
@@ -2033,7 +2088,7 @@ found:
 
 found2:
 	idx += u;
-	DBG("unused idx is %u - inserting call object\n", idx);
+	DBG("unused idx is %u\n", idx);
 
 	return idx;
 }
