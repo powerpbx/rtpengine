@@ -229,11 +229,21 @@ struct re_call {
 	struct re_auto_array		streams_array;
 };
 
+struct re_stream_packet {
+	struct list_head		list;
+	unsigned char			*buf;
+	unsigned int			buflen;
+};
+
 struct re_stream {
 	atomic_t			refcnt;
 	struct rtpengine_stream_info	info;
 
 	struct proc_dir_entry		*file;
+
+	spinlock_t			list_lock;
+	struct re_stream_packet		packet_list;
+	unsigned int			list_count;
 };
 
 struct rtpengine_table {
@@ -2254,6 +2264,8 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 	memset(stream, 0, sizeof(*stream));
 
 	atomic_set(&stream->refcnt, 1);
+	INIT_LIST_HEAD(&stream->packet_list.list);
+	spin_lock_init(&stream->list_lock);
 
 	stream->file = proc_create_user(info->stream_name, S_IFREG | S_IRUSR | S_IRGRP, call->root,
 			&proc_stream_ops, NULL);
@@ -2334,6 +2346,8 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 	struct re_call *call;
 	struct re_stream *stream;
 	int err;
+	struct re_stream_packet *packet;
+	unsigned long flags;
 
 	DBG("received %u bytes of data\n", len);
 
@@ -2348,8 +2362,39 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 
 	DBG("data for stream %s\n", stream->info.stream_name);
 
-	stream_put(stream);
+	/* alloc and copy */
+
+	err = -ENOMEM;
+	packet = kmalloc(sizeof(*packet), GFP_KERNEL);
+	if (!packet)
+		goto out2;
+	packet->buf = kmalloc(len, GFP_KERNEL);
+	if (!packet->buf)
+		goto err;
+
+	memcpy(packet->buf, data, len);
+	packet->buflen = len;
+
+	/* append */
+
+	spin_lock_irqsave(&stream->list_lock, flags);
+
+	/* XXX check list_count */
+
+	list_add_tail(&packet->list, &stream->packet_list.list);
+	stream->list_count++;
+
+	DBG("%u packets now in queue\n", stream->list_count);
+
+	spin_unlock_irqrestore(&stream->list_lock, flags);
+
 	err = 0;
+	goto out2;
+
+err:
+	kfree(packet);
+out2:
+	stream_put(stream);
 out:
 	call_put(call);
 	return err;
