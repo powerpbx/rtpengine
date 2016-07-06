@@ -2265,71 +2265,9 @@ out:
 
 
 
-static ssize_t proc_control_read(struct file *file, char __user *buf, size_t buflen, loff_t *off) {
-	struct inode *inode;
-	u_int32_t id;
-	struct rtpengine_table *t;
-	struct rtpengine_message msg;
-	int err;
-
-	if (buflen != sizeof(msg))
-		return -EIO;
-
-	inode = file->f_path.dentry->d_inode;
-	id = (u_int32_t) (unsigned long) PDE_DATA(inode);
-	t = get_table(id);
-	if (!t)
-		return -ENOENT;
-
-	/* unconventional? - we use read() as input + output */
-	err = -EFAULT;
-	if (copy_from_user(&msg, buf, sizeof(msg)))
-		goto err;
-
-	switch (msg.cmd) {
-		case REMG_ADD_CALL:
-			err = table_new_call(t, &msg.u.call);
-			if (err)
-				goto err;
-			break;
-
-		case REMG_DEL_CALL:
-			err = table_del_call(t, msg.u.call.call_idx);
-			if (err)
-				goto err;
-			break;
-
-		case REMG_ADD_STREAM:
-			err = table_new_stream(t, &msg.u.stream);
-			if (err)
-				goto err;
-			break;
-
-		case REMG_DEL_STREAM:
-			err = table_del_stream(t, &msg.u.stream);
-			if (err)
-				goto err;
-			break;
-
-		default:
-			printk(KERN_WARNING "xt_RTPENGINE unimplemented read op %u\n", msg.cmd);
-			err = -EINVAL;
-			goto err;
-	}
-
-	table_put(t);
-
-	if (copy_to_user(buf, &msg, sizeof(msg)))
-		return -EFAULT;
-
-	return buflen;
-
-err:
-	table_put(t);
-	return err;
-}
-
-static ssize_t proc_control_write(struct file *file, const char __user *buf, size_t buflen, loff_t *off) {
+static inline ssize_t proc_control_read_write(struct file *file, char __user *buf, size_t buflen, loff_t *off,
+		int writeable)
+{
 	struct inode *inode;
 	u_int32_t id;
 	struct rtpengine_table *t;
@@ -2372,13 +2310,48 @@ static ssize_t proc_control_write(struct file *file, const char __user *buf, siz
 				goto err;
 			break;
 
+		case REMG_ADD_CALL:
+			err = -EINVAL;
+			if (!writeable)
+				goto err;
+			err = table_new_call(t, &msg.u.call);
+			if (err)
+				goto err;
+			break;
+
+		case REMG_DEL_CALL:
+			err = table_del_call(t, msg.u.call.call_idx);
+			if (err)
+				goto err;
+			break;
+
+		case REMG_ADD_STREAM:
+			err = -EINVAL;
+			if (!writeable)
+				goto err;
+			err = table_new_stream(t, &msg.u.stream);
+			if (err)
+				goto err;
+			break;
+
+		case REMG_DEL_STREAM:
+			err = table_del_stream(t, &msg.u.stream);
+			if (err)
+				goto err;
+			break;
+
 		default:
-			printk(KERN_WARNING "xt_RTPENGINE unimplemented write op %u\n", msg.cmd);
+			printk(KERN_WARNING "xt_RTPENGINE unimplemented op %u\n", msg.cmd);
 			err = -EINVAL;
 			goto err;
 	}
 
 	table_put(t);
+
+	if (writeable) {
+		if (copy_to_user(buf, &msg, sizeof(msg)))
+			return -EFAULT;
+	}
 
 	return buflen;
 
@@ -2386,6 +2359,13 @@ err:
 	table_put(t);
 	return err;
 }
+static ssize_t proc_control_write(struct file *file, const char __user *buf, size_t buflen, loff_t *off) {
+	return proc_control_read_write(file, (char __user *) buf, buflen, off, 0);
+}
+static ssize_t proc_control_read(struct file *file, char __user *buf, size_t buflen, loff_t *off) {
+	return proc_control_read_write(file, buf, buflen, off, 1);
+}
+
 
 
 
