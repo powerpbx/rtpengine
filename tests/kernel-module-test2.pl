@@ -130,6 +130,8 @@ print("ret = $ret, code = $!\n");
 
 sleep($sleep);
 
+exit();
+
 print("deleting stream\n");
 
 $msg = rtpengine_message_stream('del_stream', $idx1, $sidx1, '');

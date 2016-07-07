@@ -137,6 +137,8 @@ static void proc_main_list_stop(struct seq_file *, void *);
 static void *proc_main_list_next(struct seq_file *, void *, loff_t *);
 static int proc_main_list_show(struct seq_file *, void *);
 
+static int proc_stream_open(struct inode *, struct file *);
+static int proc_stream_close(struct inode *, struct file *);
 static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t *o);
 
 static void table_put(struct rtpengine_table *);
@@ -246,7 +248,7 @@ struct re_stream {
 	struct proc_dir_entry		*file;
 
 	spinlock_t			list_lock;
-	struct re_stream_packet		packet_list;
+	struct list_head		packet_list;
 	unsigned int			list_count;
 };
 
@@ -379,8 +381,8 @@ static const struct seq_operations proc_main_list_seq_ops = {
 static const struct file_operations proc_stream_ops = {
 	.owner			= THIS_MODULE,
 	.read			= proc_stream_read,
-	.open			= proc_generic_open_modref,
-	.release		= proc_generic_close_modref,
+	.open			= proc_stream_open,
+	.release		= proc_stream_close,
 };
 
 static const struct re_cipher re_ciphers[] = {
@@ -740,6 +742,8 @@ done:
 
 
 static void stream_put(struct re_stream *stream) {
+	struct re_stream_packet *packet;
+
 	if (!stream)
 		return;
 
@@ -749,6 +753,14 @@ static void stream_put(struct re_stream *stream) {
 	DBG("Freeing stream object\n");
 
 	clear_proc(&stream->file);
+
+	while (!list_empty(&stream->packet_list)) {
+		packet = list_first_entry(&stream->packet_list, struct re_stream_packet, list);
+		list_del(&packet->list);
+		kfree(packet->buf);
+		kfree(packet);
+	}
+
 	kfree(stream);
 }
 static int iter_stream_put(void *p, unsigned int idx) {
@@ -767,6 +779,7 @@ static void call_put(struct re_call *call) {
 	auto_array_iterate(&call->streams_array, iter_stream_put);
 	clear_proc(&call->root);
 	auto_array_free(&call->streams_array);
+
 	kfree(call);
 }
 
@@ -2296,11 +2309,11 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 		goto fail2;
 
 	atomic_set(&stream->refcnt, 1);
-	INIT_LIST_HEAD(&stream->packet_list.list);
+	INIT_LIST_HEAD(&stream->packet_list);
 	spin_lock_init(&stream->list_lock);
 
 	stream->file = proc_create_user(info->stream_name, S_IFREG | S_IRUSR | S_IRGRP, call->root,
-			&proc_stream_ops, NULL);
+			&proc_stream_ops, stream); /* XXX race condition with stream obj? */
 	err = -ENOMEM;
 	if (!stream->file)
 		goto fail3;
@@ -2372,8 +2385,69 @@ out:
 
 
 
-static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t *o) {
+static int proc_stream_open(struct inode *i, struct file *f) {
+	struct re_stream *stream = PDE_DATA(i);
+	int err;
+
+	if ((err = proc_generic_open_modref(i, f)))
+		return err;
+
+	/* XXX race condition between open and delete/free? */
+
+	if (!stream) {
+		proc_generic_close_modref(i, f);
+		return -ENXIO;
+	}
+	ref_get(stream);
+
 	return 0;
+}
+
+static int proc_stream_close(struct inode *i, struct file *f) {
+	struct re_stream *stream = PDE_DATA(i);
+	if (stream)
+		stream_put(stream);
+	return proc_generic_close_modref(i, f);
+}
+
+static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t *o) {
+	struct re_stream *stream = PDE_DATA(f->f_path.dentry->d_inode);
+	unsigned long flags;
+	struct re_stream_packet *packet = NULL;
+	ssize_t ret;
+
+	if (!stream)
+		return -EINVAL;
+
+	/* reference already held */
+
+	spin_lock_irqsave(&stream->list_lock, flags);
+
+	if (list_empty(&stream->packet_list)) {
+		DBG("list is empty\n");
+		ret = -ENOENT;
+		goto done;
+	}
+
+	DBG("removing packet from queue\n");
+	packet = list_first_entry(&stream->packet_list, struct re_stream_packet, list);
+	list_del(&packet->list);
+
+done:
+	spin_unlock_irqrestore(&stream->list_lock, flags);
+
+	if (!packet)
+		return ret;
+
+	ret = packet->buflen;
+	if (ret > l)
+		ret = l;
+	if (copy_to_user(b, packet->buf, ret))
+		ret = -EFAULT;
+	kfree(packet->buf);
+	kfree(packet);
+
+	return ret;
 }
 
 
@@ -2403,6 +2477,7 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 
 	/* alloc and copy */
 
+	/* XXX combine two mallocs into one */
 	err = -ENOMEM;
 	packet = kmalloc(sizeof(*packet), GFP_KERNEL);
 	if (!packet)
@@ -2420,7 +2495,7 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 
 	/* XXX check list_count */
 
-	list_add_tail(&packet->list, &stream->packet_list.list);
+	list_add_tail(&packet->list, &stream->packet_list);
 	stream->list_count++;
 
 	DBG("%u packets now in queue\n", stream->list_count);
