@@ -114,8 +114,10 @@ static int proc_control_close(struct inode *, struct file *);
 static ssize_t proc_status(struct file *, char __user *, size_t, loff_t *);
 
 static ssize_t proc_main_control_write(struct file *, const char __user *, size_t, loff_t *);
-static int proc_main_control_open(struct inode *, struct file *);
-static int proc_main_control_close(struct inode *, struct file *);
+
+static int proc_generic_open_modref(struct inode *, struct file *);
+static int proc_generic_close_modref(struct inode *, struct file *);
+static int proc_generic_seqrelease_modref(struct inode *inode, struct file *file);
 
 static int proc_list_open(struct inode *, struct file *);
 
@@ -134,6 +136,8 @@ static void *proc_main_list_start(struct seq_file *, loff_t *);
 static void proc_main_list_stop(struct seq_file *, void *);
 static void *proc_main_list_next(struct seq_file *, void *, loff_t *);
 static int proc_main_list_show(struct seq_file *, void *);
+
+static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t *o);
 
 static void table_put(struct rtpengine_table *);
 static struct rtpengine_target *get_target(struct rtpengine_table *, const struct re_address *);
@@ -314,6 +318,7 @@ struct rtp_parsed {
 
 
 static const struct file_operations proc_control_ops = {
+	.owner			= THIS_MODULE,
 	.read			= proc_control_read,
 	.write			= proc_control_write,
 	.open			= proc_control_open,
@@ -321,23 +326,29 @@ static const struct file_operations proc_control_ops = {
 };
 
 static const struct file_operations proc_main_control_ops = {
+	.owner			= THIS_MODULE,
 	.write			= proc_main_control_write,
-	.open			= proc_main_control_open,
-	.release		= proc_main_control_close,
+	.open			= proc_generic_open_modref,
+	.release		= proc_generic_close_modref,
 };
 
 static const struct file_operations proc_status_ops = {
+	.owner			= THIS_MODULE,
 	.read			= proc_status,
+	.open			= proc_generic_open_modref,
+	.release		= proc_generic_close_modref,
 };
 
 static const struct file_operations proc_list_ops = {
+	.owner			= THIS_MODULE,
 	.open			= proc_list_open,
 	.read			= seq_read,
 	.llseek			= seq_lseek,
-	.release		= seq_release,
+	.release		= proc_generic_seqrelease_modref,
 };
 
 static const struct file_operations proc_blist_ops = {
+	.owner			= THIS_MODULE,
 	.open			= proc_blist_open,
 	.read			= proc_blist_read,
 	.release		= proc_blist_close,
@@ -351,10 +362,11 @@ static const struct seq_operations proc_list_seq_ops = {
 };
 
 static const struct file_operations proc_main_list_ops = {
+	.owner			= THIS_MODULE,
 	.open			= proc_main_list_open,
 	.read			= seq_read,
 	.llseek			= seq_lseek,
-	.release		= seq_release,
+	.release		= proc_generic_seqrelease_modref,
 };
 
 static const struct seq_operations proc_main_list_seq_ops = {
@@ -365,6 +377,10 @@ static const struct seq_operations proc_main_list_seq_ops = {
 };
 
 static const struct file_operations proc_stream_ops = {
+	.owner			= THIS_MODULE,
+	.read			= proc_stream_read,
+	.open			= proc_generic_open_modref,
+	.release		= proc_generic_close_modref,
 };
 
 static const struct re_cipher re_ciphers[] = {
@@ -847,6 +863,9 @@ static ssize_t proc_status(struct file *f, char __user *b, size_t l, loff_t *o) 
 
 
 static int proc_main_list_open(struct inode *i, struct file *f) {
+	int err;
+	if ((err = proc_generic_open_modref(i, f)))
+		return err;
 	return seq_open(f, &proc_main_list_seq_ops);
 }
 
@@ -1040,6 +1059,10 @@ next_rda:
 static int proc_blist_open(struct inode *i, struct file *f) {
 	u_int32_t id;
 	struct rtpengine_table *t;
+	int err;
+
+	if ((err = proc_generic_open_modref(i, f)))
+		return err;
 
 	id = (u_int32_t) (unsigned long) PDE_DATA(i);
 	t = get_table(id);
@@ -1061,6 +1084,8 @@ static int proc_blist_close(struct inode *i, struct file *f) {
 		return 0;
 
 	table_put(t);
+
+	proc_generic_close_modref(i, f);
 
 	return 0;
 }
@@ -1136,6 +1161,9 @@ static int proc_list_open(struct inode *i, struct file *f) {
 	struct seq_file *p;
 	u_int32_t id;
 	struct rtpengine_table *t;
+
+	if ((err = proc_generic_open_modref(i, f)))
+		return err;
 
 	id = (u_int32_t) (unsigned long) PDE_DATA(i);
 	t = get_table(id);
@@ -1939,15 +1967,18 @@ static struct rtpengine_target *get_target(struct rtpengine_table *t, const stru
 
 
 
-static int proc_main_control_open(struct inode *inode, struct file *file) {
+static int proc_generic_open_modref(struct inode *inode, struct file *file) {
 	if (!try_module_get(THIS_MODULE))
 		return -ENXIO;
 	return 0;
 }
-
-static int proc_main_control_close(struct inode *inode, struct file *file) {
+static int proc_generic_close_modref(struct inode *inode, struct file *file) {
 	module_put(THIS_MODULE);
 	return 0;
+}
+static int proc_generic_seqrelease_modref(struct inode *inode, struct file *file) {
+	proc_generic_close_modref(inode, file);
+	return seq_release(inode, file);
 }
 
 static ssize_t proc_main_control_write(struct file *file, const char __user *buf, size_t buflen, loff_t *off) {
@@ -2004,6 +2035,10 @@ static int proc_control_open(struct inode *inode, struct file *file) {
 	u_int32_t id;
 	struct rtpengine_table *t;
 	unsigned long flags;
+	int err;
+
+	if ((err = proc_generic_open_modref(inode, file)))
+		return err;
 
 	id = (u_int32_t) (unsigned long) PDE_DATA(inode);
 	t = get_table(id);
@@ -2038,6 +2073,8 @@ static int proc_control_close(struct inode *inode, struct file *file) {
 	write_unlock_irqrestore(&table_lock, flags);
 
 	table_put(t);
+
+	proc_generic_close_modref(inode, file);
 
 	return 0;
 }
@@ -2335,6 +2372,13 @@ out:
 	call_put(call);
 
 	return err;
+}
+
+
+
+
+static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t *o) {
+	return 0;
 }
 
 
