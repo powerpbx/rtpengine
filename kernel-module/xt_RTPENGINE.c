@@ -455,13 +455,11 @@ static struct rtpengine_table *new_table(void) {
 	if (!try_module_get(THIS_MODULE))
 		return NULL;
 
-	t = kmalloc(sizeof(*t), GFP_KERNEL);
+	t = kzalloc(sizeof(*t), GFP_KERNEL);
 	if (!t) {
 		module_put(THIS_MODULE);
 		return NULL;
 	}
-
-	memset(t, 0, sizeof(*t));
 
 	atomic_set(&t->refcnt, 1);
 	rwlock_init(&t->target_lock);
@@ -1790,10 +1788,10 @@ static int table_new_target(struct rtpengine_table *t, struct rtpengine_target_i
 	/* initializing */
 
 	err = -ENOMEM;
-	g = kmalloc(sizeof(*g), GFP_KERNEL);
+	g = kzalloc(sizeof(*g), GFP_KERNEL);
 	if (!g)
 		goto fail1;
-	memset(g, 0, sizeof(*g));
+
 	g->table = t->id;
 	atomic_set(&g->refcnt, 1);
 	spin_lock_init(&g->decrypt.lock);
@@ -1838,11 +1836,11 @@ retry:
 
 	write_unlock_irqrestore(&t->target_lock, flags);
 
-	rda = kmalloc(sizeof(*rda), GFP_KERNEL);
+	rda = kzalloc(sizeof(*rda), GFP_KERNEL);
 	err = -ENOMEM;
 	if (!rda)
 		goto fail2;
-	memset(rda, 0, sizeof(*rda));
+
 	memcpy(&rda->destination, &i->local, sizeof(rda->destination));
 
 	write_lock_irqsave(&t->target_lock, flags);
@@ -1868,11 +1866,10 @@ got_rda:
 
 	write_unlock_irqrestore(&t->target_lock, flags);
 
-	b = kmalloc(sizeof(*b), GFP_KERNEL);
+	b = kzalloc(sizeof(*b), GFP_KERNEL);
 	err = -ENOMEM;
 	if (!b)
 		goto fail2;
-	memset(b, 0, sizeof(*b));
 
 	write_lock_irqsave(&t->target_lock, flags);
 
@@ -2203,10 +2200,9 @@ static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_i
 
 	/* allocate and initialize */
 
-	call = kmalloc(sizeof(*call), GFP_KERNEL);
+	call = kzalloc(sizeof(*call), GFP_KERNEL);
 	if (!call)
 		return -ENOMEM;
-	memset(call, 0, sizeof(*call));
 
 	atomic_set(&call->refcnt, 1);
 
@@ -2295,10 +2291,9 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 	/* allocate and initialize */
 
 	err = -ENOMEM;
-	stream = kmalloc(sizeof(*stream), GFP_KERNEL);
+	stream = kzalloc(sizeof(*stream), GFP_KERNEL);
 	if (!stream)
 		goto fail2;
-	memset(stream, 0, sizeof(*stream));
 
 	atomic_set(&stream->refcnt, 1);
 	INIT_LIST_HEAD(&stream->packet_list.list);
