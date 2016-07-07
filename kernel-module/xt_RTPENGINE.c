@@ -250,6 +250,7 @@ struct re_stream {
 	spinlock_t			list_lock;
 	struct list_head		packet_list;
 	unsigned int			list_count;
+	wait_queue_head_t		wq;
 };
 
 struct rtpengine_table {
@@ -2311,6 +2312,7 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 	atomic_set(&stream->refcnt, 1);
 	INIT_LIST_HEAD(&stream->packet_list);
 	spin_lock_init(&stream->list_lock);
+	init_waitqueue_head(&stream->wq);
 
 	stream->file = proc_create_user(info->stream_name, S_IFREG | S_IRUSR | S_IRGRP, call->root,
 			&proc_stream_ops, stream); /* XXX race condition with stream obj? */
@@ -2413,7 +2415,7 @@ static int proc_stream_close(struct inode *i, struct file *f) {
 static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t *o) {
 	struct re_stream *stream = PDE_DATA(f->f_path.dentry->d_inode);
 	unsigned long flags;
-	struct re_stream_packet *packet = NULL;
+	struct re_stream_packet *packet;
 	ssize_t ret;
 
 	if (!stream)
@@ -2423,21 +2425,23 @@ static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t
 
 	spin_lock_irqsave(&stream->list_lock, flags);
 
-	if (list_empty(&stream->packet_list)) {
+	while (list_empty(&stream->packet_list)) {
+		spin_unlock_irqrestore(&stream->list_lock, flags);
 		DBG("list is empty\n");
-		ret = -ENOENT;
-		goto done;
+		if ((f->f_flags & O_NONBLOCK))
+			return -EAGAIN;
+		DBG("going to sleep\n");
+		if (wait_event_interruptible(stream->wq, !list_empty(&stream->packet_list)))
+			return -ERESTARTSYS;
+		DBG("awakened\n");
+		spin_lock_irqsave(&stream->list_lock, flags);
 	}
 
 	DBG("removing packet from queue\n");
 	packet = list_first_entry(&stream->packet_list, struct re_stream_packet, list);
 	list_del(&packet->list);
 
-done:
 	spin_unlock_irqrestore(&stream->list_lock, flags);
-
-	if (!packet)
-		return ret;
 
 	ret = packet->buflen;
 	if (ret > l)
@@ -2501,6 +2505,8 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 	DBG("%u packets now in queue\n", stream->list_count);
 
 	spin_unlock_irqrestore(&stream->list_lock, flags);
+
+	wake_up_interruptible(&stream->wq);
 
 	err = 0;
 	goto out2;

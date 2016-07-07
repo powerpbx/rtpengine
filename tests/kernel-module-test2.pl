@@ -59,7 +59,7 @@ sub rtpengine_message_packet {
 	return $ret;
 }
 
-my $sleep = 1;
+my $sleep = 5;
 
 print("creating one call\n");
 
@@ -129,8 +129,6 @@ $ret = syswrite(F, $msg) // '-';
 print("ret = $ret, code = $!\n");
 
 sleep($sleep);
-
-exit();
 
 print("deleting stream\n");
 
