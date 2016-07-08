@@ -140,6 +140,7 @@ static int proc_main_list_show(struct seq_file *, void *);
 static int proc_stream_open(struct inode *, struct file *);
 static int proc_stream_close(struct inode *, struct file *);
 static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t *o);
+static unsigned int proc_stream_poll(struct file *f, struct poll_table_struct *p);
 
 static void table_put(struct rtpengine_table *);
 static struct rtpengine_target *get_target(struct rtpengine_table *, const struct re_address *);
@@ -384,6 +385,7 @@ static const struct seq_operations proc_main_list_seq_ops = {
 static const struct file_operations proc_stream_ops = {
 	.owner			= THIS_MODULE,
 	.read			= proc_stream_read,
+	.poll			= proc_stream_poll,
 	.open			= proc_stream_open,
 	.release		= proc_stream_close,
 };
@@ -2504,6 +2506,21 @@ static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t
 	if (copy_to_user(b, packet->buf, ret))
 		ret = -EFAULT;
 	free_packet(packet);
+
+	return ret;
+}
+static unsigned int proc_stream_poll(struct file *f, struct poll_table_struct *p) {
+	struct re_stream *stream = PDE_DATA(f->f_path.dentry->d_inode);
+	unsigned long flags;
+	unsigned int ret = 0;
+
+	spin_lock_irqsave(&stream->list_lock, flags);
+
+	poll_wait(f, &stream->wq, p);
+	if (!list_empty(&stream->packet_list) || stream->eof)
+		ret |= POLLIN | POLLRDNORM;
+
+	spin_unlock_irqrestore(&stream->list_lock, flags);
 
 	return ret;
 }

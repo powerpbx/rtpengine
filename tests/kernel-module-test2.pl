@@ -121,7 +121,7 @@ print("index is $sidx3\n");
 
 sleep($sleep);
 
-for (1 .. 20) {
+while (1) {
 	print("delivering a packet\n");
 
 	$msg = rtpengine_message_packet('packet', $idx2, $sidx3, 'packet data bla bla ' . rand() . "\n");
