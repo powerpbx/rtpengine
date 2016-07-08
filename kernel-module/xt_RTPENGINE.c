@@ -153,6 +153,7 @@ static int srtp_encrypt_aes_f8(struct re_crypto_context *, struct rtpengine_srtp
 
 static void auto_array_iterate(struct re_auto_array *a, int (*func)(void *, unsigned int));
 static void call_put(struct re_call *call);
+static void del_stream(struct re_stream *stream);
 
 
 
@@ -251,6 +252,7 @@ struct re_stream {
 	struct list_head		packet_list;
 	unsigned int			list_count;
 	wait_queue_head_t		wq;
+	int				eof;
 };
 
 struct rtpengine_table {
@@ -742,9 +744,19 @@ done:
 }
 
 
-static void stream_put(struct re_stream *stream) {
+/* caller is responsible for locking */
+static void clear_stream_packets(struct re_stream *stream) {
 	struct re_stream_packet *packet;
 
+	while (!list_empty(&stream->packet_list)) {
+		DBG("clearing packet from queue\n");
+		packet = list_first_entry(&stream->packet_list, struct re_stream_packet, list);
+		list_del(&packet->list);
+		kfree(packet->buf);
+		kfree(packet);
+	}
+}
+static void stream_put(struct re_stream *stream) {
 	if (!stream)
 		return;
 
@@ -753,18 +765,13 @@ static void stream_put(struct re_stream *stream) {
 
 	DBG("Freeing stream object\n");
 
-	clear_proc(&stream->file);
-
-	while (!list_empty(&stream->packet_list)) {
-		packet = list_first_entry(&stream->packet_list, struct re_stream_packet, list);
-		list_del(&packet->list);
-		kfree(packet->buf);
-		kfree(packet);
-	}
+	clear_stream_packets(stream);
+	/* stream->file must already have been cleared */
 
 	kfree(stream);
 }
 static int iter_stream_put(void *p, unsigned int idx) {
+	del_stream(p);
 	stream_put(p); /* no need to zero entry in array - will be freed anyway */
 	return 0;
 }
@@ -2248,6 +2255,10 @@ fail2:
 	return err;
 }
 
+static int iter_stream_del(void *p, unsigned int idx) {
+	del_stream(p);
+	return 0;
+}
 static int table_del_call(struct rtpengine_table *table, unsigned int idx) {
 	unsigned long flags;
 	int err;
@@ -2263,7 +2274,7 @@ static int table_del_call(struct rtpengine_table *table, unsigned int idx) {
 	bitfield_clear(table->calls_array.used_bitfield, idx);
 	table->calls_array.array[idx] = NULL; /* steal ref */
 
-	/* XXX delete sub-items */
+	auto_array_iterate(&call->streams_array, iter_stream_del);
 
 	err = 0;
 
@@ -2350,6 +2361,35 @@ fail2:
 	return err;
 }
 
+static void del_stream(struct re_stream *stream) {
+	unsigned long flags;
+
+	/* Organizing proper shutdown: Sleeping readers hold a reference to the stream which
+	 * will only be released when they close the file. However, clear_proc() blocks until
+	 * all files have been closed. Thus, doing the clear_proc() in stream_put() (when the
+	 * object is freed) doesn't work as readers would deadlock themselves. We must do the
+	 * clear_proc() here, which must be protected by a lock. */
+
+	spin_lock_irqsave(&stream->list_lock, flags);
+
+	if (stream->eof) {
+		/* already done this */
+		spin_unlock_irqrestore(&stream->list_lock, flags);
+		return;
+	}
+
+	stream->eof = 1;
+	clear_stream_packets(stream);
+
+	spin_unlock_irqrestore(&stream->list_lock, flags);
+
+	wake_up_interruptible(&stream->wq);
+	/* sleeping readers will now close files and release references */
+
+	/* safe here - guaranteed to run only once */
+	clear_proc(&stream->file);
+}
+
 static int table_del_stream(struct rtpengine_table *table, const struct rtpengine_stream_info *info) {
 	unsigned long flags;
 	int err;
@@ -2370,6 +2410,8 @@ static int table_del_stream(struct rtpengine_table *table, const struct rtpengin
 
 	bitfield_clear(call->streams_array.used_bitfield, info->stream_idx);
 	call->streams_array.array[info->stream_idx] = NULL; /* steal ref */
+
+	del_stream(stream);
 
 	err = 0;
 
@@ -2407,6 +2449,7 @@ static int proc_stream_open(struct inode *i, struct file *f) {
 
 static int proc_stream_close(struct inode *i, struct file *f) {
 	struct re_stream *stream = PDE_DATA(i);
+	DBG("closing proc stream file\n");
 	if (stream)
 		stream_put(stream);
 	return proc_generic_close_modref(i, f);
@@ -2425,16 +2468,22 @@ static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t
 
 	spin_lock_irqsave(&stream->list_lock, flags);
 
-	while (list_empty(&stream->packet_list)) {
+	while (list_empty(&stream->packet_list) && !stream->eof) {
 		spin_unlock_irqrestore(&stream->list_lock, flags);
 		DBG("list is empty\n");
 		if ((f->f_flags & O_NONBLOCK))
 			return -EAGAIN;
 		DBG("going to sleep\n");
-		if (wait_event_interruptible(stream->wq, !list_empty(&stream->packet_list)))
+		if (wait_event_interruptible(stream->wq, !list_empty(&stream->packet_list) || stream->eof))
 			return -ERESTARTSYS;
 		DBG("awakened\n");
 		spin_lock_irqsave(&stream->list_lock, flags);
+	}
+
+	if (stream->eof) {
+		DBG("eof\n");
+		spin_unlock_irqrestore(&stream->list_lock, flags);
+		return 0;
 	}
 
 	DBG("removing packet from queue\n");
@@ -2497,7 +2546,7 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 
 	spin_lock_irqsave(&stream->list_lock, flags);
 
-	/* XXX check list_count */
+	/* XXX check list_count and eof flag */
 
 	list_add_tail(&packet->list, &stream->packet_list);
 	stream->list_count++;
