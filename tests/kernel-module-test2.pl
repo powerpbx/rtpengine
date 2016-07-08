@@ -59,7 +59,7 @@ sub rtpengine_message_packet {
 	return $ret;
 }
 
-my $sleep = 10;
+my $sleep = 1;
 
 # print("creating one call\n");
 # 
@@ -121,14 +121,16 @@ print("index is $sidx3\n");
 
 sleep($sleep);
 
-print("delivering a packet\n");
+for (1 .. 20) {
+	print("delivering a packet\n");
 
-$msg = rtpengine_message_packet('packet', $idx2, $sidx3, 'packet data bla bla');
-$ret = syswrite(F, $msg) // '-';
-#print("reply: " . unpack("H*", $msg) . "\n");
-print("ret = $ret, code = $!\n");
+	$msg = rtpengine_message_packet('packet', $idx2, $sidx3, 'packet data bla bla ' . rand() . "\n");
+	$ret = syswrite(F, $msg) // '-';
+	#print("reply: " . unpack("H*", $msg) . "\n");
+	print("ret = $ret, code = $!\n");
 
-sleep($sleep);
+	sleep($sleep);
+}
 
 # print("deleting stream\n");
 # 

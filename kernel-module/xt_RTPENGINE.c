@@ -744,6 +744,12 @@ done:
 }
 
 
+static inline void free_packet(struct re_stream_packet *packet) {
+	if (packet->buf)
+		kfree(packet->buf);
+	kfree(packet);
+}
+
 /* caller is responsible for locking */
 static void clear_stream_packets(struct re_stream *stream) {
 	struct re_stream_packet *packet;
@@ -752,8 +758,7 @@ static void clear_stream_packets(struct re_stream *stream) {
 		DBG("clearing packet from queue\n");
 		packet = list_first_entry(&stream->packet_list, struct re_stream_packet, list);
 		list_del(&packet->list);
-		kfree(packet->buf);
-		kfree(packet);
+		free_packet(packet);
 	}
 }
 static void stream_put(struct re_stream *stream) {
@@ -2489,6 +2494,7 @@ static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t
 	DBG("removing packet from queue\n");
 	packet = list_first_entry(&stream->packet_list, struct re_stream_packet, list);
 	list_del(&packet->list);
+	stream->list_count--;
 
 	spin_unlock_irqrestore(&stream->list_lock, flags);
 
@@ -2497,8 +2503,7 @@ static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t
 		ret = l;
 	if (copy_to_user(b, packet->buf, ret))
 		ret = -EFAULT;
-	kfree(packet->buf);
-	kfree(packet);
+	free_packet(packet);
 
 	return ret;
 }
@@ -2514,6 +2519,7 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 	int err;
 	struct re_stream_packet *packet;
 	unsigned long flags;
+	LIST_HEAD(delete_list);
 
 	DBG("received %u bytes of data\n", len);
 
@@ -2546,22 +2552,41 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 
 	spin_lock_irqsave(&stream->list_lock, flags);
 
-	/* XXX check list_count and eof flag */
+	err = 0;
+	if (stream->eof)
+		goto err2; /* we accept, but ignore/discard */
 
 	list_add_tail(&packet->list, &stream->packet_list);
 	stream->list_count++;
 
 	DBG("%u packets now in queue\n", stream->list_count);
 
+	/* discard older packets */
+	while (stream->list_count > 10) { /* XXX make configurable */
+		DBG("discarding old packet from queue\n");
+		packet = list_first_entry(&stream->packet_list, struct re_stream_packet, list);
+		list_del(&packet->list);
+		list_add(&packet->list, &delete_list);
+		stream->list_count--;
+	}
+
 	spin_unlock_irqrestore(&stream->list_lock, flags);
 
 	wake_up_interruptible(&stream->wq);
 
+	while (!list_empty(&delete_list)) {
+		packet = list_first_entry(&delete_list, struct re_stream_packet, list);
+		list_del(&packet->list);
+		free_packet(packet);
+	}
+
 	err = 0;
 	goto out2;
 
+err2:
+	spin_unlock_irqrestore(&stream->list_lock, flags);
 err:
-	kfree(packet);
+	free_packet(packet);
 out2:
 	stream_put(stream);
 out:
