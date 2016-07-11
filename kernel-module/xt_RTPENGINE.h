@@ -8,7 +8,7 @@
 
 
 struct xt_rtpengine_info {
-	u_int32_t			id;
+	unsigned int			id;
 };
 
 struct rtpengine_stats {
