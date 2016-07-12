@@ -238,12 +238,12 @@ struct re_stream_packet {
 	struct list_head		list_entry;
 	unsigned char			*buf;
 	unsigned int			buflen;
+	struct sk_buff			*skbuf;
 };
 
 struct re_stream {
 	atomic_t			refcnt;
 	struct rtpengine_stream_info	info;
-	unsigned int			call_idx;
 
 	struct proc_dir_entry		*file;
 
@@ -728,6 +728,8 @@ static void table_put(struct rtpengine_table *t) {
 static inline void free_packet(struct re_stream_packet *packet) {
 	if (packet->buf)
 		kfree(packet->buf);
+	if (packet->skbuf)
+		kfree_skb(packet->skbuf);
 	kfree(packet);
 }
 
@@ -2153,6 +2155,8 @@ static struct re_call *get_call(struct rtpengine_table *table, unsigned int idx)
 		return NULL;
 
 	ret = calls.array[idx];
+	if (!ret)
+		return NULL;
 	if (table && ret->table_id != table->id)
 		return NULL;
 	return ret;
@@ -2179,7 +2183,9 @@ static struct re_stream *get_stream(struct re_call *call, unsigned int idx) {
 		return NULL;
 
 	ret = streams.array[idx];
-	if (call && ret->call_idx != call->info.call_idx)
+	if (!ret)
+		return NULL;
+	if (call && ret->info.call_idx != call->info.call_idx)
 		return NULL;
 	return ret;
 }
@@ -2350,7 +2356,6 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 	INIT_LIST_HEAD(&stream->packet_list);
 	spin_lock_init(&stream->packet_list_lock);
 	init_waitqueue_head(&stream->wq);
-	stream->call_idx = call->info.call_idx;
 
 	/* add into array */
 
@@ -2426,7 +2431,7 @@ static void del_stream(struct re_stream *stream) {
 
 	if (streams.array[stream->info.stream_idx] == stream) {
 		bitfield_clear(streams.used_bitfield, stream->info.stream_idx);
-		calls.array[stream->info.stream_idx] = NULL;
+		streams.array[stream->info.stream_idx] = NULL;
 		stream_put(stream);
 	}
 
@@ -2475,6 +2480,7 @@ static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t
 	unsigned long flags;
 	struct re_stream_packet *packet;
 	ssize_t ret;
+	const char *to_copy;
 
 	stream = get_stream_lock(NULL, stream_idx);
 	if (!stream)
@@ -2510,11 +2516,25 @@ static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t
 
 	spin_unlock_irqrestore(&stream->packet_list_lock, flags);
 
-	ret = packet->buflen;
+	if (packet->buf) {
+		ret = packet->buflen;
+		to_copy = packet->buf;
+	}
+	else if (packet->skbuf) {
+		ret = packet->skbuf->len;
+		to_copy = packet->skbuf->data;
+	}
+	else {
+		ret = -ENXIO;
+		goto err;
+	}
+
 	if (ret > l)
 		ret = l;
-	if (copy_to_user(b, packet->buf, ret))
+	if (copy_to_user(b, to_copy, ret))
 		ret = -EFAULT;
+
+err:
 	free_packet(packet);
 
 out:
@@ -2547,42 +2567,10 @@ static unsigned int proc_stream_poll(struct file *f, struct poll_table_struct *p
 
 
 
-static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packet_info *info,
-		const unsigned char *data, unsigned int len)
-{
-	struct re_call *call;
-	struct re_stream *stream;
+static void add_stream_packet(struct re_stream *stream, struct re_stream_packet *packet) {
 	int err;
-	struct re_stream_packet *packet;
 	unsigned long flags;
 	LIST_HEAD(delete_list);
-
-	DBG("received %u bytes of data\n", len);
-
-	call = get_call_lock(t, info->call_idx);
-	if (!call)
-		return -ENOENT;
-
-	err = -ENOENT;
-	stream = get_stream_lock(call, info->stream_idx);
-	if (!stream)
-		goto out;
-
-	DBG("data for stream %s\n", stream->info.stream_name);
-
-	/* alloc and copy */
-
-	/* XXX combine two mallocs into one */
-	err = -ENOMEM;
-	packet = kmalloc(sizeof(*packet), GFP_KERNEL);
-	if (!packet)
-		goto out2;
-	packet->buf = kmalloc(len, GFP_KERNEL);
-	if (!packet->buf)
-		goto err;
-
-	memcpy(packet->buf, data, len);
-	packet->buflen = len;
 
 	/* append */
 
@@ -2590,7 +2578,7 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 
 	err = 0;
 	if (stream->eof)
-		goto err2; /* we accept, but ignore/discard */
+		goto err; /* we accept, but ignore/discard */
 
 	list_add_tail(&packet->list_entry, &stream->packet_list);
 	stream->list_count++;
@@ -2616,11 +2604,55 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 		free_packet(packet);
 	}
 
+	return;
+
+err:
+	spin_unlock_irqrestore(&stream->packet_list_lock, flags);
+	free_packet(packet);
+	return;
+}
+
+static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packet_info *info,
+		const unsigned char *data, unsigned int len)
+{
+	struct re_call *call;
+	struct re_stream *stream;
+	int err;
+	struct re_stream_packet *packet;
+
+	DBG("received %u bytes of data from userspace\n", len);
+
+	call = get_call_lock(t, info->call_idx);
+	if (!call)
+		return -ENOENT;
+
+	err = -ENOENT;
+	stream = get_stream_lock(call, info->stream_idx);
+	if (!stream)
+		goto out;
+
+	DBG("data for stream %s\n", stream->info.stream_name);
+
+	/* alloc and copy */
+
+	/* XXX combine two mallocs into one */
+	err = -ENOMEM;
+	packet = kzalloc(sizeof(*packet), GFP_KERNEL);
+	if (!packet)
+		goto out2;
+	packet->buf = kmalloc(len, GFP_KERNEL);
+	if (!packet->buf)
+		goto err;
+
+	memcpy(packet->buf, data, len);
+	packet->buflen = len;
+
+	/* append */
+	add_stream_packet(stream, packet);
+
 	err = 0;
 	goto out2;
 
-err2:
-	spin_unlock_irqrestore(&stream->packet_list_lock, flags);
 err:
 	free_packet(packet);
 out2:
@@ -3263,7 +3295,8 @@ static inline int rtp_payload_type(const struct rtp_header *hdr, const struct rt
 #endif
 
 static unsigned int rtpengine46(struct sk_buff *skb, struct rtpengine_table *t, struct re_address *src,
-		struct re_address *dst, u_int8_t in_tos, const struct xt_action_param *par)
+		struct re_address *dst, u_int8_t in_tos, const struct xt_action_param *par,
+		struct sk_buff *oskb)
 {
 	struct udphdr *uh;
 	struct rtpengine_target *g;
@@ -3276,6 +3309,8 @@ static unsigned int rtpengine46(struct sk_buff *skb, struct rtpengine_table *t, 
 	u_int32_t *u32;
 	struct rtp_parsed rtp;
 	u_int64_t pkt_idx;
+	struct re_stream *stream;
+	struct re_stream_packet *packet;
 
 #if (RE_HAS_MEASUREDELAY)
 	u_int64_t starttime, endtime, delay;
@@ -3383,6 +3418,27 @@ not_rtp:
 			atomic64_inc(&g->stats.errors);
 	}
 
+	if (g->target.do_intercept) {
+		DBG("do_intercept is set\n");
+		stream = get_stream_lock(NULL, g->target.intercept_stream_idx);
+		if (!stream)
+			goto no_intercept;
+		packet = kzalloc(sizeof(*packet), GFP_ATOMIC);
+		if (!packet)
+			goto intercept_done;
+		packet->skbuf = skb_copy(oskb, GFP_ATOMIC);
+		if (!packet->skbuf)
+			goto no_intercept_free;
+		add_stream_packet(stream, packet);
+		goto intercept_done;
+
+no_intercept_free:
+		free_packet(packet);
+intercept_done:
+		stream_put(stream);
+	}
+
+no_intercept:
 	if (rtp.ok) {
 		pkt_idx = packet_index(&g->encrypt, &g->target.encrypt, rtp.header);
 		srtp_encrypt(&g->encrypt, &g->target.encrypt, &rtp, pkt_idx);
@@ -3491,7 +3547,7 @@ static unsigned int rtpengine4(struct sk_buff *oskb, const struct xt_action_para
 	dst.family = AF_INET;
 	dst.u.ipv4 = ih->daddr;
 
-	return rtpengine46(skb, t, &src, &dst, (u_int8_t)ih->tos, par);
+	return rtpengine46(skb, t, &src, &dst, (u_int8_t)ih->tos, par, oskb);
 
 skip2:
 	kfree_skb(skb);
@@ -3536,7 +3592,7 @@ static unsigned int rtpengine6(struct sk_buff *oskb, const struct xt_action_para
 	dst.family = AF_INET6;
 	memcpy(&dst.u.ipv6, &ih->daddr, sizeof(dst.u.ipv6));
 
-	return rtpengine46(skb, t, &src, &dst, ipv6_get_dsfield(ih), par);
+	return rtpengine46(skb, t, &src, &dst, ipv6_get_dsfield(ih), par, oskb);
 
 skip2:
 	kfree_skb(skb);

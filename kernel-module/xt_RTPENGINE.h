@@ -83,6 +83,7 @@ struct rtpengine_target_info {
 	struct re_address		dst_addr;
 
 	struct re_address		mirror_addr;
+	unsigned int			intercept_stream_idx;
 
 	struct rtpengine_srtp		decrypt;
 	struct rtpengine_srtp		encrypt;
@@ -96,7 +97,8 @@ struct rtpengine_target_info {
 					dtls:1,
 					stun:1,
 					rtp:1,
-					rtp_only:1;
+					rtp_only:1,
+					do_intercept:1;
 };
 
 struct rtpengine_call_info {
