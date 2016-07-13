@@ -155,6 +155,9 @@ static void call_put(struct re_call *call);
 static void del_stream(struct re_stream *stream);
 static void del_call(struct re_call *call);
 
+static inline int bitfield_set(unsigned long *bf, unsigned int i);
+static inline int bitfield_clear(unsigned long *bf, unsigned int i);
+
 
 
 
@@ -218,13 +221,17 @@ struct re_dest_addr_hash {
 	struct re_dest_addr		*addrs[256];
 };
 
+struct re_auto_array_free_list {
+	struct list_head		list_entry;
+	unsigned int			index;
+};
 struct re_auto_array {
 	rwlock_t			lock;
 
 	void				**array;
 	unsigned int			array_len;
 	unsigned long			*used_bitfield;
-	/* XXX free list */
+	struct list_head		free_list;
 };
 
 struct re_call {
@@ -463,13 +470,50 @@ static const char *re_msm_strings[] = {
 /* must already be initialized to zero */
 static void auto_array_init(struct re_auto_array *a) {
 	rwlock_init(&a->lock);
+	INIT_LIST_HEAD(&a->free_list);
 }
 
+/* lock must be held */
+static void set_auto_array_index(struct re_auto_array *a, unsigned int idx, void *ptr) {
+	a->array[idx] = ptr;
+	bitfield_set(a->used_bitfield, idx);
+}
+/* lock must be held */
+static void auto_array_clear_index(struct re_auto_array *a, unsigned int idx) {
+	struct re_auto_array_free_list *fl;
+
+	bitfield_clear(a->used_bitfield, idx);
+	a->array[idx] = NULL;
+
+	fl = kmalloc(sizeof(*fl), GFP_KERNEL);
+	if (!fl)
+		return;
+
+	DBG("adding %u to free list\n", idx);
+	fl->index = idx;
+	list_add(&fl->list_entry, &a->free_list);
+}
+/* lock must be held */
+static unsigned int pop_free_list_entry(struct re_auto_array *a) {
+	unsigned int ret;
+	struct re_auto_array_free_list *fl;
+
+	fl = list_first_entry(&a->free_list, struct re_auto_array_free_list, list_entry);
+	ret = fl->index;
+	list_del(&fl->list_entry);
+	kfree(fl);
+
+	DBG("popped %u from free list\n", ret);
+	return ret;
+}
 static void auto_array_free(struct re_auto_array *a) {
+
 	if (a->array)
 		kfree(a->array);
 	if (a->used_bitfield)
 		kfree(a->used_bitfield);
+	while (!list_empty(&a->free_list))
+		pop_free_list_entry(a);
 }
 
 static struct rtpengine_table *new_table(void) {
@@ -2096,6 +2140,9 @@ static int auto_array_find_free_index(struct re_auto_array *a) {
 	void *ptr;
 	unsigned int u, idx;
 
+	if (!list_empty(&a->free_list))
+		return pop_free_list_entry(a);
+
 	for (idx = 0; idx < a->array_len / (sizeof(unsigned long) * 8); idx++) {
 		if (~a->used_bitfield[idx])
 			goto found;
@@ -2248,8 +2295,7 @@ static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_i
 	idx = err = auto_array_find_free_index(&calls);
 	if (err < 0)
 		goto fail3;
-	calls.array[idx] = call; /* handing over our ref */
-	bitfield_set(calls.used_bitfield, idx);
+	set_auto_array_index(&calls, idx, call); /* handing over ref */
 
 	info->call_idx = idx;
 	memcpy(&call->info, info, sizeof(call->info));
@@ -2306,8 +2352,7 @@ static void del_call(struct re_call *call) {
 	}
 
 	if (calls.array[call->info.call_idx] == call) {
-		bitfield_clear(calls.used_bitfield, call->info.call_idx);
-		calls.array[call->info.call_idx] = NULL;
+		auto_array_clear_index(&calls, call->info.call_idx);
 		call_put(call);
 	}
 
@@ -2368,8 +2413,7 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 	idx = err = auto_array_find_free_index(&streams);
 	if (err < 0)
 		goto fail4;
-	streams.array[idx] = stream; /* handing over our ref */
-	bitfield_set(streams.used_bitfield, idx);
+	set_auto_array_index(&streams, idx, stream); /* handing over ref */
 
 	/* copy info */
 
@@ -2394,8 +2438,7 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 	return 0;
 
 fail5:
-	streams.array[idx] = NULL;
-	bitfield_clear(streams.used_bitfield, idx);
+	auto_array_clear_index(&streams, idx);
 fail4:
 	write_unlock_irqrestore(&streams.lock, flags);
 	stream_put(stream);
@@ -2436,8 +2479,7 @@ static void del_stream(struct re_stream *stream) {
 	}
 
 	if (streams.array[stream->info.stream_idx] == stream) {
-		bitfield_clear(streams.used_bitfield, stream->info.stream_idx);
-		streams.array[stream->info.stream_idx] = NULL;
+		auto_array_clear_index(&streams, stream->info.stream_idx);
 		stream_put(stream);
 	}
 
