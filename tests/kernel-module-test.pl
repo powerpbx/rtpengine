@@ -95,12 +95,12 @@ sub rtpengine_message_call {
 }
 
 sub rtpengine_message_stream {
-	my ($cmd, $call_idx, $stream_idx, $stream_name) = @_;
+	my ($cmd, $call_idx, $stream_idx, $stream_name, $max_packets) = @_;
 
 	my $ret = '';
 
 	# amd64 alignment
-	$ret .= pack('VV VV a256', $cmds{$cmd}, 0, $call_idx, $stream_idx, $stream_name // '');
+	$ret .= pack('VV VVV a256', $cmds{$cmd}, 0, $call_idx, $stream_idx, $max_packets // 0, $stream_name // '');
 
 	while (length($ret) < 792) {
 		$ret .= pack('v', 0);
@@ -126,7 +126,7 @@ sub rtpengine_message_packet {
 	return $ret;
 }
 
-my $sleep = 10;
+my $sleep = 2;
 
 my @local = qw(inet4 192.168.1.194);
 my @src = qw(inet 192.168.1.194);
@@ -341,6 +341,20 @@ print("add 9876 -> 1234/6543\n");
 $ret = syswrite(F, rtpengine_message('add', local_addr => \@local, local_port => 9876, src_addr => \@src, src_port => 1234, dst_addr => \@dst, dst_port => 6543, tos => 184, decrypt => $dec, encrypt => $enc, stream_idx => $sidx1, flags => 0x20)) // '-';
 print("ret = $ret, code = $!\n");
 sleep($sleep);
+
+
+
+for (1 .. 50) {
+	print("delivering a packet\n");
+
+	$msg = rtpengine_message_packet('packet', $idx1, $sidx1, 'packet data bla bla ' . rand() . "\n");
+	$ret = syswrite(F, $msg) // '-';
+	#print("reply: " . unpack("H*", $msg) . "\n");
+	print("ret = $ret, code = $!\n");
+
+	sleep($sleep);
+}
+
 
 
 

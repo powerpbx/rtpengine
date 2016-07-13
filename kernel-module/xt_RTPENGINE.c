@@ -88,17 +88,21 @@ struct rtpengine_table;
 
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
-kuid_t proc_kuid;
-uint proc_uid = 0;
+static kuid_t proc_kuid;
+static uint proc_uid = 0;
 module_param(proc_uid, uint, 0);
 MODULE_PARM_DESC(proc_uid, "rtpengine procfs tree user id");
 
 
-kgid_t proc_kgid;
-uint proc_gid = 0;
+static kgid_t proc_kgid;
+static uint proc_gid = 0;
 module_param(proc_gid, uint, 0);
 MODULE_PARM_DESC(proc_gid, "rtpengine procfs tree group id");
 #endif
+
+static uint stream_packets_list_limit = 10;
+module_param(stream_packets_list_limit, uint, 0);
+MODULE_PARM_DESC(stream_packets_list_limit, "maximum number of packets to retain for intercept streams");
 
 
 
@@ -2371,6 +2375,8 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 
 	info->stream_idx = idx;
 	memcpy(&stream->info, info, sizeof(call->info));
+	if (!stream->info.max_packets)
+		stream->info.max_packets = stream_packets_list_limit;
 
 	stream->file = proc_create_user(info->stream_name, S_IFREG | S_IRUSR | S_IRGRP, call->root,
 			&proc_stream_ops, (void *) (unsigned long) info->stream_idx);
@@ -2586,7 +2592,7 @@ static void add_stream_packet(struct re_stream *stream, struct re_stream_packet 
 	DBG("%u packets now in queue\n", stream->list_count);
 
 	/* discard older packets */
-	while (stream->list_count > 10) { /* XXX make configurable */
+	while (stream->list_count > stream->info.max_packets) {
 		DBG("discarding old packet from queue\n");
 		packet = list_first_entry(&stream->packet_list, struct re_stream_packet, list_entry);
 		list_del(&packet->list_entry);
@@ -3658,6 +3664,11 @@ static struct xt_target xt_rtpengine_regs[] = {
 static int __init init(void) {
 	int ret;
 	const char *err;
+
+	err = "stream_packets_list_limit parameter must be larger than 0";
+	ret = -EINVAL;
+	if (stream_packets_list_limit <= 0)
+		goto fail;
 
 	printk(KERN_NOTICE "Registering xt_RTPENGINE module - version %s\n", RTPENGINE_VERSION);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)

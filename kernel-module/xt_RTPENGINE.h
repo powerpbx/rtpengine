@@ -109,6 +109,7 @@ struct rtpengine_call_info {
 struct rtpengine_stream_info {
 	unsigned int			call_idx;
 	unsigned int			stream_idx;
+	unsigned int			max_packets;
 	char				stream_name[256];
 };
 
