@@ -25,6 +25,7 @@
 #include <linux/netfilter_ipv4.h>
 #include <linux/netfilter_ipv6.h>
 #include <linux/netfilter/x_tables.h>
+#include <linux/crc32.h>
 #ifndef __RE_EXTERNAL
 #include <linux/netfilter/xt_RTPENGINE.h>
 #else
@@ -152,8 +153,8 @@ static int srtp_encrypt_aes_f8(struct re_crypto_context *, struct rtpengine_srtp
 		struct rtp_parsed *, u_int64_t);
 
 static void call_put(struct re_call *call);
-static void del_stream(struct re_stream *stream);
-static void del_call(struct re_call *call);
+static void del_stream(struct re_stream *stream, struct rtpengine_table *);
+static void del_call(struct re_call *call, struct rtpengine_table *);
 
 static inline int bitfield_set(unsigned long *bf, unsigned int i);
 static inline int bitfield_clear(unsigned long *bf, unsigned int i);
@@ -238,10 +239,13 @@ struct re_call {
 	atomic_t			refcnt;
 	struct rtpengine_call_info	info;
 	unsigned int			table_id;
+	u32				hash_bucket;
 
 	struct proc_dir_entry		*root;
 
 	struct list_head		table_entry; /* protected by calls.lock */
+	struct hlist_node		calls_hash_entry;
+
 	struct list_head		streams; /* protected by streams.lock */
 };
 
@@ -255,10 +259,12 @@ struct re_stream_packet {
 struct re_stream {
 	atomic_t			refcnt;
 	struct rtpengine_stream_info	info;
+	u32				hash_bucket;
 
 	struct proc_dir_entry		*file;
 
 	struct list_head		call_entry; /* protected by streams.lock */
+	struct hlist_node		streams_hash_entry;
 
 	spinlock_t			packet_list_lock;
 	struct list_head		packet_list;
@@ -267,6 +273,7 @@ struct re_stream {
 	int				eof;
 };
 
+#define HASH_BITS 8 /* make configurable? */
 struct rtpengine_table {
 	atomic_t			refcnt;
 	rwlock_t			target_lock;
@@ -285,6 +292,11 @@ struct rtpengine_table {
 	unsigned int			num_targets;
 
 	struct list_head		calls; /* protected by calls.lock */
+
+	spinlock_t			calls_hash_lock[1 << HASH_BITS];
+	struct hlist_head		calls_hash[1 << HASH_BITS];
+	spinlock_t			streams_hash_lock[1 << HASH_BITS];
+	struct hlist_head		streams_hash[1 << HASH_BITS];
 };
 
 struct re_cipher {
@@ -518,6 +530,7 @@ static void auto_array_free(struct re_auto_array *a) {
 
 static struct rtpengine_table *new_table(void) {
 	struct rtpengine_table *t;
+	unsigned int i;
 
 	DBG("Creating new table\n");
 
@@ -534,6 +547,15 @@ static struct rtpengine_table *new_table(void) {
 	rwlock_init(&t->target_lock);
 	INIT_LIST_HEAD(&t->calls);
 	t->id = -1;
+
+	for (i = 0; i < ARRAY_SIZE(t->calls_hash); i++) {
+		INIT_HLIST_HEAD(&t->calls_hash[i]);
+		spin_lock_init(&t->calls_hash_lock[i]);
+	}
+	for (i = 0; i < ARRAY_SIZE(t->streams_hash); i++) {
+		INIT_HLIST_HEAD(&t->streams_hash[i]);
+		spin_lock_init(&t->streams_hash_lock[i]);
+	}
 
 	return t;
 }
@@ -552,7 +574,6 @@ static inline struct proc_dir_entry *proc_mkdir_user(const char *name, umode_t m
 {
 	struct proc_dir_entry *ret;
 
-	/* XXX check collisions */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
 	ret = create_proc_entry(name, S_IFDIR | mode, parent);
 #else
@@ -849,7 +870,7 @@ static int unlink_table(struct rtpengine_table *t) {
 	write_lock_irqsave(&calls.lock, flags);
 	while (!list_empty(&t->calls)) {
 		call = list_first_entry(&t->calls, struct re_call, table_entry);
-		del_call(call); /* removes it from this list */
+		del_call(call, t); /* removes it from this list */
 	}
 	write_unlock_irqrestore(&calls.lock, flags);
 
@@ -2261,7 +2282,7 @@ static struct re_stream *get_stream_lock(struct re_call *call, unsigned int idx)
 
 static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_info *info) {
 	int err;
-	struct re_call *call;
+	struct re_call *call, *hash_entry;
 	unsigned int idx;
 	unsigned long flags;
 
@@ -2284,11 +2305,35 @@ static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_i
 	call->table_id = table->id;
 	INIT_LIST_HEAD(&call->streams);
 
-	/* XXX proc creation will be slow with many directories, also bad concurrency */
+	/* check for name collisions */
+
+	call->hash_bucket = crc32_le(0x52342, info->call_id, strlen(info->call_id));
+	call->hash_bucket = call->hash_bucket & ((1 << HASH_BITS) - 1);
+
+	spin_lock(&table->calls_hash_lock[call->hash_bucket]);
+
+	hlist_for_each_entry(hash_entry, &table->calls_hash[call->hash_bucket], calls_hash_entry) {
+		if (!strcmp(hash_entry->info.call_id, info->call_id))
+			goto found;
+	}
+	goto not_found;
+found:
+	spin_unlock(&table->calls_hash_lock[call->hash_bucket]);
+	printk(KERN_ERR "Call name collision: %s\n", info->call_id);
+	err = -EEXIST;
+	goto fail2;
+
+not_found:
+	hlist_add_head(&call->calls_hash_entry, &table->calls_hash[call->hash_bucket]);
+	ref_get(call);
+	spin_unlock(&table->calls_hash_lock[call->hash_bucket]);
+
+	/* create proc */
+
 	call->root = proc_mkdir_user(info->call_id, S_IRUGO | S_IXUGO, table->proc_calls);
 	err = -ENOMEM;
 	if (!call->root)
-		goto fail2;
+		goto fail4;
 
 	write_lock_irqsave(&calls.lock, flags);
 
@@ -2309,6 +2354,11 @@ static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_i
 
 fail3:
 	write_unlock_irqrestore(&calls.lock, flags);
+fail4:
+	spin_lock(&table->calls_hash_lock[call->hash_bucket]);
+	hlist_del(&call->calls_hash_entry);
+	spin_unlock(&table->calls_hash_lock[call->hash_bucket]);
+	call_put(call);
 fail2:
 	call_put(call);
 	return err;
@@ -2326,7 +2376,7 @@ static int table_del_call(struct rtpengine_table *table, unsigned int idx) {
 	if (!call)
 		goto out;
 
-	del_call(call);
+	del_call(call, table);
 
 	err = 0;
 
@@ -2339,7 +2389,7 @@ out:
 	return err;
 }
 /* caller is responsible for locking (calls.lock) */
-static void del_call(struct re_call *call) {
+static void del_call(struct re_call *call, struct rtpengine_table *table) {
 	struct re_stream *stream;
 	unsigned long flags;
 
@@ -2359,11 +2409,18 @@ static void del_call(struct re_call *call) {
 	write_lock_irqsave(&streams.lock, flags);
 	while (!list_empty(&call->streams)) {
 		stream = list_first_entry(&call->streams, struct re_stream, call_entry);
-		del_stream(stream); /* removes it from this list */
+		del_stream(stream, table); /* removes it from this list */
 	}
 	write_unlock_irqrestore(&streams.lock, flags);
 
 	clear_proc(&call->root);
+
+	spin_lock(&table->calls_hash_lock[call->hash_bucket]);
+	if (!hlist_unhashed(&call->calls_hash_entry)) {
+		hlist_del_init(&call->calls_hash_entry);
+		call_put(call);
+	}
+	spin_unlock(&table->calls_hash_lock[call->hash_bucket]);
 
 	call_put(call); /* might be the last ref */
 }
@@ -2375,7 +2432,7 @@ static void del_call(struct re_call *call) {
 static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stream_info *info) {
 	int err;
 	struct re_call *call;
-	struct re_stream *stream;
+	struct re_stream *stream, *hash_entry;
 	unsigned long flags;
 	unsigned int idx;
 
@@ -2405,6 +2462,30 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 	INIT_LIST_HEAD(&stream->packet_list);
 	spin_lock_init(&stream->packet_list_lock);
 	init_waitqueue_head(&stream->wq);
+
+	/* check for name collisions */
+
+	stream->hash_bucket = crc32_le(0x52342 ^ info->call_idx, info->stream_name, strlen(info->stream_name));
+	stream->hash_bucket = stream->hash_bucket & ((1 << HASH_BITS) - 1);
+
+	spin_lock(&table->streams_hash_lock[stream->hash_bucket]);
+
+	hlist_for_each_entry(hash_entry, &table->streams_hash[stream->hash_bucket], streams_hash_entry) {
+		if (hash_entry->info.call_idx == info->call_idx
+				&& !strcmp(hash_entry->info.stream_name, info->stream_name))
+			goto found;
+	}
+	goto not_found;
+found:
+	spin_unlock(&table->streams_hash_lock[stream->hash_bucket]);
+	printk(KERN_ERR "Stream name collision: %s\n", info->stream_name);
+	err = -EEXIST;
+	goto fail3;
+
+not_found:
+	hlist_add_head(&stream->streams_hash_entry, &table->streams_hash[stream->hash_bucket]);
+	ref_get(stream);
+	spin_unlock(&table->streams_hash_lock[stream->hash_bucket]);
 
 	/* add into array */
 
@@ -2441,6 +2522,12 @@ fail5:
 	auto_array_clear_index(&streams, idx);
 fail4:
 	write_unlock_irqrestore(&streams.lock, flags);
+
+	spin_lock(&table->streams_hash_lock[stream->hash_bucket]);
+	hlist_del(&stream->streams_hash_entry);
+	spin_unlock(&table->streams_hash_lock[stream->hash_bucket]);
+	stream_put(stream);
+fail3:
 	stream_put(stream);
 fail2:
 	call_put(call);
@@ -2448,7 +2535,7 @@ fail2:
 }
 
 /* caller is responsible for locking (streams.lock) */
-static void del_stream(struct re_stream *stream) {
+static void del_stream(struct re_stream *stream, struct rtpengine_table *table) {
 	unsigned long flags;
 
 	/* the only references left might be the ones in the lists, so get one until we're done */
@@ -2472,6 +2559,13 @@ static void del_stream(struct re_stream *stream) {
 	/* sleeping readers will now close files */
 
 	clear_proc(&stream->file);
+
+	spin_lock(&table->streams_hash_lock[stream->hash_bucket]);
+	if (!hlist_unhashed(&stream->streams_hash_entry)) {
+		hlist_del_init(&stream->streams_hash_entry);
+		stream_put(stream);
+	}
+	spin_unlock(&table->streams_hash_lock[stream->hash_bucket]);
 
 	if (!list_empty(&stream->call_entry)) {
 		list_del_init(&stream->call_entry);
@@ -2504,7 +2598,7 @@ static int table_del_stream(struct rtpengine_table *table, const struct rtpengin
 	if (!stream)
 		goto out;
 
-	del_stream(stream);
+	del_stream(stream, table);
 
 	err = 0;
 
