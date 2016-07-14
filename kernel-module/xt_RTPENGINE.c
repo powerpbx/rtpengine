@@ -251,9 +251,9 @@ struct re_call {
 
 struct re_stream_packet {
 	struct list_head		list_entry;
-	unsigned char			*buf;
 	unsigned int			buflen;
 	struct sk_buff			*skbuf;
+	unsigned char			buf[];
 };
 
 struct re_stream {
@@ -795,8 +795,6 @@ static void table_put(struct rtpengine_table *t) {
 
 
 static inline void free_packet(struct re_stream_packet *packet) {
-	if (packet->buf)
-		kfree(packet->buf);
 	if (packet->skbuf)
 		kfree_skb(packet->skbuf);
 	kfree(packet);
@@ -2757,19 +2755,14 @@ err:
 static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packet_info *info,
 		const unsigned char *data, unsigned int len)
 {
-	struct re_call *call;
 	struct re_stream *stream;
 	int err;
 	struct re_stream_packet *packet;
 
 	DBG("received %u bytes of data from userspace\n", len);
 
-	call = get_call_lock(t, info->call_idx);
-	if (!call)
-		return -ENOENT;
-
 	err = -ENOENT;
-	stream = get_stream_lock(call, info->stream_idx);
+	stream = get_stream_lock(NULL, info->stream_idx);
 	if (!stream)
 		goto out;
 
@@ -2777,14 +2770,11 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 
 	/* alloc and copy */
 
-	/* XXX combine two mallocs into one */
 	err = -ENOMEM;
-	packet = kzalloc(sizeof(*packet), GFP_KERNEL);
+	packet = kmalloc(sizeof(*packet) + len, GFP_KERNEL);
 	if (!packet)
 		goto out2;
-	packet->buf = kmalloc(len, GFP_KERNEL);
-	if (!packet->buf)
-		goto err;
+	memset(packet, 0, sizeof(*packet));
 
 	memcpy(packet->buf, data, len);
 	packet->buflen = len;
@@ -2795,12 +2785,9 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 	err = 0;
 	goto out2;
 
-err:
-	free_packet(packet);
 out2:
 	stream_put(stream);
 out:
-	call_put(call);
 	return err;
 }
 

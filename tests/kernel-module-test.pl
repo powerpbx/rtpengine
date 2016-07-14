@@ -287,6 +287,20 @@ my $msg;
 			sleep($sleep);
 		}
 
+		for (1 .. rand(30)) {
+			@streams or last;
+
+			my $idx = $streams[rand(@streams)];
+			$idx = $idx->[1];
+			print("delivering a packet to $idx\n");
+
+			$msg = rtpengine_message_packet('packet', 0, $idx, 'packet data bla bla ' . rand() . "\n");
+			$ret = syswrite(F, $msg) // '-';
+			print("ret = $ret, code = $!\n");
+
+			sleep($sleep);
+		}
+
 		$runs--;
 	}
 }
