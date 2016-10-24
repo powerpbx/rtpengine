@@ -31,7 +31,7 @@ struct recording {
  * Initialize RTP Engine filesystem settings and structure.
  * Check for or create the RTP Engine spool directory.
  */
-void recording_fs_init(char *spooldir);
+void recording_fs_init(const char *spooldir, const char *method);
 
 /**
  *

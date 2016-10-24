@@ -12,42 +12,88 @@
 #include "call.h"
 
 
-int maybe_create_spool_dir(char *dirpath);
-int set_record_call(struct call *call, str recordcall);
-str *init_write_pcap_file(struct call *call);
+struct recording_method {
+	const char *name;
+	int (*create_spool_dir)(const char *);
+};
+
+
+
+static int pcap_create_spool_dir(const char *dirpath);
+static int check_main_spool_dir(const char *spoolpath);
+
+static int set_record_call(struct call *call, str recordcall);
+static str *init_write_pcap_file(struct call *call);
+
+static const struct recording_method methods[] = {
+	{
+		.name = "pcap",
+		.create_spool_dir = pcap_create_spool_dir,
+	},
+	{
+		.name = "proc",
+		.create_spool_dir = check_main_spool_dir,
+	},
+};
+
 
 // Global file reference to the spool directory.
 static char *spooldir = NULL;
 // Used for URL encoding functions
 CURL *curl;
 
+const static struct recording_method *method;
+
 
 /**
  * Initialize RTP Engine filesystem settings and structure.
  * Check for or create the RTP Engine spool directory.
  */
-void recording_fs_init(char *spoolpath) {
+void recording_fs_init(const char *spoolpath, const char *method_str) {
+	int i;
+
 	curl = curl_easy_init();
 	// Whether or not to fail if the spool directory does not exist.
-	int dne_fail;
 	if (spoolpath == NULL || spoolpath[0] == '\0')
 		return;
 
-	dne_fail = TRUE;
-	int path_len = strlen(spoolpath);
-	// Get rid of trailing "/" if it exists. Other code adds that in when needed.
-	if (spoolpath[path_len-1] == '/') {
-		spoolpath[path_len-1] = '\0';
-	}
-	if (!maybe_create_spool_dir(spoolpath)) {
-		fprintf(stderr, "Error while setting up spool directory \"%s\".\n", spoolpath);
-		if (dne_fail) {
-			fprintf(stderr, "Please run `mkdir %s` and start rtpengine again.\n", spoolpath);
-			exit(-1);
+	for (i = 0; i < G_N_ELEMENTS(methods); i++) {
+		if (!strcmp(methods[i].name, method_str)) {
+			method = &methods[i];
+			goto found;
 		}
-	} else {
-		spooldir = strdup(spoolpath);
 	}
+
+	ilog(LOG_ERROR, "Recording method '%s' not supported", method_str);
+	return;
+
+found:
+	spooldir = strdup(spoolpath);
+
+	int path_len = strlen(spooldir);
+	// Get rid of trailing "/" if it exists. Other code adds that in when needed.
+	if (spooldir[path_len-1] == '/') {
+		spooldir[path_len-1] = '\0';
+	}
+	if (!method->create_spool_dir(spooldir)) {
+		fprintf(stderr, "Error while setting up spool directory \"%s\".\n", spooldir);
+		fprintf(stderr, "Please run `mkdir %s` and start rtpengine again.\n", spooldir);
+		exit(-1);
+	}
+}
+
+static int check_main_spool_dir(const char *spoolpath) {
+	struct stat info;
+
+	if (stat(spoolpath, &info) != 0) {
+		fprintf(stderr, "Spool directory \"%s\" does not exist.\n", spoolpath);
+		return FALSE;
+	}
+	if (!S_ISDIR(info.st_mode)) {
+		fprintf(stderr, "Spool file exists, but \"%s\" is not a directory.\n", spoolpath);
+		return FALSE;
+	}
+	return TRUE;
 }
 
 /**
@@ -59,39 +105,34 @@ void recording_fs_init(char *spoolpath) {
  *
  * Create the "metadata" and "pcaps" directories if they are not there.
  */
-int maybe_create_spool_dir(char *spoolpath) {
+static int pcap_create_spool_dir(const char *spoolpath) {
 	struct stat info;
 	int spool_good = TRUE;
 
-	if (stat(spoolpath, &info) != 0) {
-		fprintf(stderr, "Spool directory \"%s\" does not exist.\n", spoolpath);
-		spool_good = FALSE;
-	} else if (!S_ISDIR(info.st_mode)) {
-		fprintf(stderr, "Spool file exists, but \"%s\" is not a directory.\n", spoolpath);
-		spool_good = FALSE;
-	} else {
-		// Spool directory exists. Make sure it has inner directories.
-		int path_len = strlen(spoolpath);
-		char meta_path[path_len + 10];
-		char rec_path[path_len + 7];
-		snprintf(meta_path, path_len + 10, "%s/metadata", spoolpath);
-		snprintf(rec_path, path_len + 7, "%s/pcaps", spoolpath);
+	if (!check_main_spool_dir(spoolpath))
+		return FALSE;
 
-		if (stat(meta_path, &info) != 0) {
-			fprintf(stdout, "Creating metadata directory \"%s\".\n", meta_path);
-			mkdir(meta_path, 0777);
-		} else if(!S_ISDIR(info.st_mode)) {
-			fprintf(stderr, "metadata file exists, but \"%s\" is not a directory.\n", meta_path);
-			spool_good = FALSE;
-		}
+	// Spool directory exists. Make sure it has inner directories.
+	int path_len = strlen(spoolpath);
+	char meta_path[path_len + 10];
+	char rec_path[path_len + 7];
+	snprintf(meta_path, path_len + 10, "%s/metadata", spoolpath);
+	snprintf(rec_path, path_len + 7, "%s/pcaps", spoolpath);
 
-		if (stat(rec_path, &info) != 0) {
-			fprintf(stdout, "Creating pcaps directory \"%s\".\n", rec_path);
-			mkdir(rec_path, 0777);
-		} else if(!S_ISDIR(info.st_mode)) {
-			fprintf(stderr, "pcaps file exists, but \"%s\" is not a directory.\n", rec_path);
-			spool_good = FALSE;
-		}
+	if (stat(meta_path, &info) != 0) {
+		fprintf(stdout, "Creating metadata directory \"%s\".\n", meta_path);
+		mkdir(meta_path, 0777);
+	} else if(!S_ISDIR(info.st_mode)) {
+		fprintf(stderr, "metadata file exists, but \"%s\" is not a directory.\n", meta_path);
+		spool_good = FALSE;
+	}
+
+	if (stat(rec_path, &info) != 0) {
+		fprintf(stdout, "Creating pcaps directory \"%s\".\n", rec_path);
+		mkdir(rec_path, 0777);
+	} else if(!S_ISDIR(info.st_mode)) {
+		fprintf(stderr, "pcaps file exists, but \"%s\" is not a directory.\n", rec_path);
+		spool_good = FALSE;
 	}
 
 	return spool_good;
@@ -124,7 +165,7 @@ int detect_setup_recording(struct call *call, str recordcall) {
  *
  * Returns a boolean for whether or not the call is being recorded.
  */
-int set_record_call(struct call *call, str recordcall) {
+static int set_record_call(struct call *call, str recordcall) {
 	if (!str_cmp(&recordcall, "yes")) {
 		if (call->record_call == FALSE) {
 			if (!spooldir) {
@@ -158,7 +199,7 @@ int set_record_call(struct call *call, str recordcall) {
  * Checks if we have a PCAP file for the call yet.
  * If not, create it and write its location to the metadata file.
  */
-str *init_write_pcap_file(struct call *call) {
+static str *init_write_pcap_file(struct call *call) {
 	str *pcap_path = recording_setup_file(call->recording, call->callid);
 	if (pcap_path != NULL && call->recording->recording_pdumper != NULL
 	    && call->recording->meta_fp) {

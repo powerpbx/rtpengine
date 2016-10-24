@@ -194,6 +194,7 @@ option and which are reproduced below:
 	  --homer-protocol=udp|tcp         Transport protocol for Homer (default udp)
 	  --homer-id=INT                   'Capture ID' to use within the HEP protocol
 	  --recording-dir=FILE             Spool directory where PCAP call recording data goes
+	  --recording-method=pcap|proc     Strategy for call recording
 
 Most of these options are indeed optional, with two exceptions. It's mandatory to specify at least one local
 IP address through `--interface`, and at least one of the `--listen-...` options must be given.
@@ -503,12 +504,32 @@ The options are described in more detail below.
 
 		generic metadata
 
-    There are two empty lines between each logic block of metadata.
-    We write out all answer SDP, each separated from one another by one empty
-    line. The generic metadata at the end can be any length with any number of
-    lines. Metadata files will appear in the subdirectory when the call
-    completes. PCAP files will be written to the subdirectory as the call is
-    being recorded.
+	There are two empty lines between each logic block of metadata.
+	We write out all answer SDP, each separated from one another by one empty
+	line. The generic metadata at the end can be any length with any number of
+	lines. Metadata files will appear in the subdirectory when the call
+	completes. PCAP files will be written to the subdirectory as the call is
+	being recorded.
+
+* --recording-method
+
+	Multiple methods of call recording are supported and this option can be used to select one.
+	Currently supported are the method `pcap` and `proc`.
+	The default method is `pcap` and is the one described above.
+
+	The recording method `proc` works by writing metadata files directly into the
+	`recording-dir` (i.e. not into a subdirectory) and instead of recording RTP packet data
+	into pcap files, the packet data is exposed via a special interface in the `/proc` filesystem.
+	Packets must then be retrieved from this interface by a dedicated 3rd party userspace component
+	(usually a daemon).
+
+	Packet data is held in kernel memory until retrieved by the userspace component, but only a limited
+	number of packets (default 10) per media stream. If packets are not retrieved in time, they will
+	be simply discarded. This makes it possible to flag all calls to be recorded and then leave it
+	to the userspace component to decided whether to use the packet data for any purpose or not.
+
+	In-kernel packet forwarding is fully supported with this recording method even for calls being
+	recorded.
 
 A typical command line (enabling both UDP and NG protocols) thus may look like:
 
