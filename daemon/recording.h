@@ -14,16 +14,23 @@
 #include "call.h"
 
 
-struct recording {
+struct recording_pcap {
 	str           *meta_filepath;
 	FILE          *meta_fp;
-	str           *metadata;
 	pcap_t        *recording_pd;
 	pcap_dumper_t *recording_pdumper;
 	uint64_t      packet_num;
 	str           *recording_path;
 
 	mutex_t       recording_lock;
+};
+
+struct recording {
+	union {
+		struct recording_pcap pcap;
+	};
+
+	str           *metadata;
 };
 
 
@@ -82,8 +89,8 @@ str *meta_setup_file(struct recording *recording, str callid);
 /**
  * Write out a block of SDP to the metadata file.
  */
-ssize_t meta_write_sdp(FILE *meta_fp, struct iovec *sdp_iov, int iovcnt,
-		       uint64_t packet_num, enum call_opmode opmode);
+ssize_t meta_write_sdp(struct recording *, struct iovec *sdp_iov, int iovcnt,
+		       enum call_opmode opmode);
 
 /**
  * Writes metadata to metafile, closes file, and moves it to finished location.
@@ -111,6 +118,6 @@ void recording_finish_file(struct recording *recording);
  * Write out a PCAP packet with payload string.
  * A fair amount extraneous of packet data is spoofed.
  */
-void stream_pcap_dump(pcap_dumper_t *pdumper, struct packet_stream *sink, str *s);
+void dump_packet(struct recording *, struct packet_stream *, str *s);
 
 #endif

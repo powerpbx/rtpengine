@@ -741,12 +741,12 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	if (!ret)
 		ret = sdp_replace(chopper, &parsed, monologue->active_dialogue, &flags);
 
+	struct iovec *sdp_iov = &g_array_index(chopper->iov, struct iovec, 0);
+
 	struct recording *recording = call->recording;
-	if (call->record_call && recording != NULL && recording->meta_fp != NULL) {
-		struct iovec *iov = &g_array_index(chopper->iov, struct iovec, 0);
-		int iovcnt = chopper->iov_num;
-		meta_write_sdp(recording->meta_fp, iov, iovcnt,
-			       call->recording->packet_num, opmode);
+	if (call->record_call && recording != NULL) {
+		meta_write_sdp(recording, sdp_iov, chopper->iov_num,
+			       opmode);
 	}
 	bencode_dictionary_get_str(input, "metadata", &metadata);
 	if (metadata.len > 0 && call->recording != NULL) {
@@ -756,9 +756,11 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 		}
 		call->recording->metadata = str_dup(&metadata);
 	}
+
+	// XXX clean this up
 	bencode_item_t *recordings = bencode_dictionary_add_list(output, "recordings");
-	if (call->recording != NULL && call->recording->recording_path != NULL) {
-		char *recording_path = call->recording->recording_path->s;
+	if (call->recording != NULL && call->recording->pcap.recording_path != NULL) {
+		char *recording_path = call->recording->pcap.recording_path->s;
 		bencode_list_add_string(recordings, recording_path);
 	}
 
@@ -778,7 +780,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	if (ret)
 		goto out;
 
-	bencode_dictionary_add_iovec(output, "sdp", &g_array_index(chopper->iov, struct iovec, 0),
+	bencode_dictionary_add_iovec(output, "sdp", sdp_iov,
 		chopper->iov_num, chopper->str_len);
 	bencode_dictionary_add_string(output, "result", "ok");
 

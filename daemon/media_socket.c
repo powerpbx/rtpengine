@@ -1074,7 +1074,6 @@ static int stream_packet(struct stream_fd *sfd, str *s, const endpoint_t *fsin, 
 	int ret = 0, update = 0, stun_ret = 0, handler_ret = 0, muxed_rtcp = 0, rtcp = 0,
 	    unk = 0;
 	int i;
-	pcap_dumper_t *recording_pdumper;
 	struct call *call;
 	struct callmaster *cm;
 	/*unsigned char cc;*/
@@ -1085,7 +1084,6 @@ static int stream_packet(struct stream_fd *sfd, str *s, const endpoint_t *fsin, 
 	struct rtp_stats *rtp_s;
 
 	call = sfd->call;
-	recording_pdumper = call->recording != NULL ? call->recording->recording_pdumper : NULL;
 	cm = call->callmaster;
 
 	rwlock_lock_r(&call->master_lock);
@@ -1231,11 +1229,8 @@ loop_ok:
 	}
 
 	// If recording pcap dumper is set, then we record the call.
-	if (recording_pdumper != NULL && call->record_call) {
-		mutex_lock(&call->recording->recording_lock);
-		stream_pcap_dump(recording_pdumper, stream, s);
-		call->recording->packet_num++;
-		mutex_unlock(&call->recording->recording_lock);
+	if (call->record_call) {
+		dump_packet(call->recording, stream, s);
 	}
 
 	if (handler_ret >= 0) {
