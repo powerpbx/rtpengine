@@ -12,15 +12,6 @@
 #include "call.h"
 
 
-struct recording_method {
-	const char *name;
-	int (*create_spool_dir)(const char *);
-	void (*init_struct)(struct call *);
-	ssize_t (*write_meta_sdp)(struct recording *, struct iovec *, int, enum call_opmode);
-	void (*dump_packet)(struct recording *, struct packet_stream *sink, str *s);
-};
-
-
 
 static int pcap_create_spool_dir(const char *dirpath);
 static int check_main_spool_dir(const char *spoolpath);
@@ -33,6 +24,8 @@ static ssize_t meta_write_sdp_pcap(struct recording *, struct iovec *sdp_iov, in
 static void dump_packet_pcap(struct recording *recording, struct packet_stream *sink, str *s);
 
 static int set_record_call(struct call *call, str recordcall);
+
+
 
 static const struct recording_method methods[] = {
 	{
@@ -47,7 +40,6 @@ static const struct recording_method methods[] = {
 		.create_spool_dir = check_main_spool_dir,
 	},
 };
-// XXX use inlining to remove a useless stack frame
 
 
 // Global file reference to the spool directory.
@@ -55,7 +47,7 @@ static char *spooldir = NULL;
 // Used for URL encoding functions
 CURL *curl;
 
-const static struct recording_method *method;
+const struct recording_method *selected_recording_method;
 
 
 /**
@@ -72,7 +64,7 @@ void recording_fs_init(const char *spoolpath, const char *method_str) {
 
 	for (i = 0; i < G_N_ELEMENTS(methods); i++) {
 		if (!strcmp(methods[i].name, method_str)) {
-			method = &methods[i];
+			selected_recording_method = &methods[i];
 			goto found;
 		}
 	}
@@ -88,7 +80,7 @@ found:
 	if (spooldir[path_len-1] == '/') {
 		spooldir[path_len-1] = '\0';
 	}
-	if (!method->create_spool_dir(spooldir)) {
+	if (!_rm(create_spool_dir, spooldir)) {
 		fprintf(stderr, "Error while setting up spool directory \"%s\".\n", spooldir);
 		fprintf(stderr, "Please run `mkdir %s` and start rtpengine again.\n", spooldir);
 		exit(-1);
@@ -204,7 +196,7 @@ static int set_record_call(struct call *call, str recordcall) {
 		call->record_call = TRUE;
 		if (call->recording == NULL) {
 			call->recording = g_slice_alloc0(sizeof(struct recording));
-			method->init_struct(call);
+			_rm(init_struct, call);
 		}
 
 		return TRUE;
@@ -284,12 +276,6 @@ static ssize_t meta_write_sdp_pcap(struct recording *recording, struct iovec *sd
 	fprintf(meta_fp, "\nSDP before RTP packet: %" PRIu64 "\n\n", recording->pcap.packet_num);
 	fflush(meta_fp);
 	return writev(meta_fd, sdp_iov, iovcnt);
-}
-
-ssize_t meta_write_sdp(struct recording *recording, struct iovec *sdp_iov, int iovcnt,
-		       enum call_opmode opmode)
-{
-	return method->write_meta_sdp(recording, sdp_iov, iovcnt, opmode);
 }
 
 /**
@@ -488,10 +474,4 @@ static void dump_packet_pcap(struct recording *recording, struct packet_stream *
 	stream_pcap_dump(recording->pcap.recording_pdumper, stream, s);
 	recording->pcap.packet_num++;
 	mutex_unlock(&recording->pcap.recording_lock);
-}
-
-void dump_packet(struct recording *recording, struct packet_stream *stream, str *s) {
-	if (!recording)
-		return;
-	method->dump_packet(recording, stream, s);
 }

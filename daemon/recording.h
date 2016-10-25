@@ -33,6 +33,23 @@ struct recording {
 	str           *metadata;
 };
 
+struct recording_method {
+	const char *name;
+	int (*create_spool_dir)(const char *);
+	void (*init_struct)(struct call *);
+	ssize_t (*write_meta_sdp)(struct recording *, struct iovec *, int, enum call_opmode);
+	void (*dump_packet)(struct recording *, struct packet_stream *sink, str *s);
+};
+
+extern const struct recording_method *selected_recording_method;
+
+#define _rm(call, args...) selected_recording_method->call(args)
+#define _rm_chk(call, recording, args...) do { \
+		if (recording) \
+			selected_recording_method->call(recording, args); \
+	} while (0)
+
+
 
 /**
  * Initialize RTP Engine filesystem settings and structure.
@@ -89,8 +106,9 @@ str *meta_setup_file(struct recording *recording, str callid);
 /**
  * Write out a block of SDP to the metadata file.
  */
-ssize_t meta_write_sdp(struct recording *, struct iovec *sdp_iov, int iovcnt,
-		       enum call_opmode opmode);
+//ssize_t meta_write_sdp(struct recording *, struct iovec *sdp_iov, int iovcnt,
+//		       enum call_opmode opmode);
+#define meta_write_sdp(args...) _rm_chk(write_meta_sdp, args)
 
 /**
  * Writes metadata to metafile, closes file, and moves it to finished location.
@@ -118,6 +136,7 @@ void recording_finish_file(struct recording *recording);
  * Write out a PCAP packet with payload string.
  * A fair amount extraneous of packet data is spoofed.
  */
-void dump_packet(struct recording *, struct packet_stream *, str *s);
+// void dump_packet(struct recording *, struct packet_stream *, str *s);
+#define dump_packet(args...) _rm_chk(dump_packet, args)
 
 #endif
