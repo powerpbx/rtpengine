@@ -113,7 +113,6 @@ There's 3 parts to rtpengine, which can be found in the respective subdirectorie
 	- *zlib*
 	- *OpenSSL*
 	- *PCRE* library
-	- *libcurl*
 	- *XMLRPC-C* version 1.16.08 or higher
 	- *hiredis* library
 

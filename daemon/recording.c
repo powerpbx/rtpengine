@@ -7,7 +7,6 @@
 #include <netinet/in.h>
 #include <time.h>
 #include <pcap.h>
-#include <curl/curl.h>
 #include <inttypes.h>
 #include "call.h"
 
@@ -16,7 +15,7 @@
 static int pcap_create_spool_dir(const char *dirpath);
 static int check_main_spool_dir(const char *spoolpath);
 static str *recording_setup_file(struct recording *recording, const str *callid);
-static str *meta_setup_file(struct recording *recording, str callid);
+static str *meta_setup_file(struct recording *recording, const str *callid);
 
 static void pcap_init(struct call *);
 static ssize_t meta_write_sdp_pcap(struct recording *, struct iovec *sdp_iov, int iovcnt,
@@ -46,8 +45,6 @@ static const struct recording_method methods[] = {
 
 // Global file reference to the spool directory.
 static char *spooldir = NULL;
-// Used for URL encoding functions
-CURL *curl;
 
 const struct recording_method *selected_recording_method;
 
@@ -59,7 +56,6 @@ const struct recording_method *selected_recording_method;
 void recording_fs_init(const char *spoolpath, const char *method_str) {
 	int i;
 
-	curl = curl_easy_init();
 	// Whether or not to fail if the spool directory does not exist.
 	if (spoolpath == NULL || spoolpath[0] == '\0')
 		return;
@@ -168,7 +164,7 @@ static void pcap_init(struct call *call) {
 	// Wireshark starts at packet index 1, so we start there, too
 	recording->pcap.packet_num = 1;
 	mutex_init(&recording->pcap.recording_lock);
-	meta_setup_file(recording, call->callid);
+	meta_setup_file(recording, &call->callid);
 
 	// set up pcap file
 	str *pcap_path = recording_setup_file(recording, &call->callid);
@@ -220,7 +216,7 @@ static int set_record_call(struct call *call, str recordcall) {
  * Create a call metadata file in a temporary location.
  * Attaches the filepath and the file pointer to the call struct.
  */
-static str *meta_setup_file(struct recording *recording, str callid) {
+static str *meta_setup_file(struct recording *recording, const str *callid) {
 	if (spooldir == NULL) {
 		// No spool directory was created, so we cannot have metadata files.
 		return NULL;
@@ -229,13 +225,13 @@ static str *meta_setup_file(struct recording *recording, str callid) {
 	int rand_bytes = 8;
 	str *meta_filepath = malloc(sizeof(str));
 	// We don't want weird characters like ":" or "@" showing up in filenames
-	char *escaped_callid = curl_easy_escape(curl, callid.s, callid.len);
+	char *escaped_callid = g_uri_escape_string(callid->s, NULL, 0);
 	int escaped_callid_len = strlen(escaped_callid);
 	// Length for spool directory path + "/tmp/rtpengine-meta-${CALLID}-"
 	int mid_len = 20 + escaped_callid_len + 1 + 1;
 	char suffix_chars[mid_len];
 	snprintf(suffix_chars, mid_len, "/tmp/rtpengine-meta-%s-", escaped_callid);
-	curl_free(escaped_callid);
+	free(escaped_callid);
 	// Initially file extension is ".tmp". When call is over, it changes to ".txt".
 	char *path_chars = rand_affixed_str(suffix_chars, rand_bytes, ".tmp");
 	meta_filepath = str_init(meta_filepath, path_chars);
@@ -364,13 +360,13 @@ static str *recording_setup_file(struct recording *recording, const str *callid)
 
 	int rand_bytes = 8;
 	// We don't want weird characters like ":" or "@" showing up in filenames
-	char *escaped_callid = curl_easy_escape(curl, callid->s, callid->len);
+	char *escaped_callid = g_uri_escape_string(callid->s, NULL, 0);
 	int escaped_callid_len = strlen(escaped_callid);
 	// Length for spool directory path + "/pcaps/${CALLID}-"
 	int rec_path_len = strlen(spooldir) + 7 + escaped_callid_len + 1 + 1;
 	char rec_path[rec_path_len];
 	snprintf(rec_path, rec_path_len, "%s/pcaps/%s-", spooldir, escaped_callid);
-	curl_free(escaped_callid);
+	free(escaped_callid);
 	char *path_chars = rand_affixed_str(rec_path, rand_bytes, ".pcap");
 
 	recording_path = malloc(sizeof(str));
