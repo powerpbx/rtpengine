@@ -15,12 +15,12 @@
 
 
 struct recording_pcap {
-	str           *meta_filepath;
+	char          *meta_filepath;
 	FILE          *meta_fp;
 	pcap_t        *recording_pd;
 	pcap_dumper_t *recording_pdumper;
 	uint64_t      packet_num;
-	str           *recording_path;
+	char          *recording_path;
 
 	mutex_t       recording_lock;
 };

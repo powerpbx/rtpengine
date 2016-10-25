@@ -8,20 +8,21 @@
 #include <time.h>
 #include <pcap.h>
 #include <inttypes.h>
+#include <errno.h>
 #include "call.h"
 
 
 
 static int pcap_create_spool_dir(const char *dirpath);
 static int check_main_spool_dir(const char *spoolpath);
-static str *recording_setup_file(struct recording *recording, const str *callid);
-static str *meta_setup_file(struct recording *recording, const str *callid);
+static char *recording_setup_file(struct recording *recording, const str *callid);
+static char *meta_setup_file(struct recording *recording, const str *callid);
 
 static void pcap_init(struct call *);
 static ssize_t meta_write_sdp_pcap(struct recording *, struct iovec *sdp_iov, int iovcnt,
 		       enum call_opmode opmode);
 static void dump_packet_pcap(struct recording *recording, struct packet_stream *sink, str *s);
-static void recording_finish_pcap(struct call *);
+static void finish_pcap(struct call *);
 
 static int set_record_call(struct call *call, str recordcall);
 
@@ -34,7 +35,7 @@ static const struct recording_method methods[] = {
 		.init_struct = pcap_init,
 		.write_meta_sdp = meta_write_sdp_pcap,
 		.dump_packet = dump_packet_pcap,
-		.finish = recording_finish_pcap,
+		.finish = finish_pcap,
 	},
 	{
 		.name = "proc",
@@ -99,6 +100,23 @@ static int check_main_spool_dir(const char *spoolpath) {
 	return TRUE;
 }
 
+static int check_create_dir(const char *dir, const char *desc) {
+	struct stat info;
+
+	if (stat(dir, &info) != 0) {
+		fprintf(stdout, "Creating %s directory \"%s\".\n", desc, dir);
+		if (mkdir(dir, 0777) == 0)
+			return TRUE;
+		fprintf(stdout, "Failed to create %s directory \"%s\": %s\n", desc, dir, strerror(errno));
+		return FALSE;
+	}
+	if(!S_ISDIR(info.st_mode)) {
+		fprintf(stderr, "%s file exists, but \"%s\" is not a directory.\n", desc, dir);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 /**
  * Sets up the spool directory for RTP Engine.
  * If the directory does not exist, return FALSE.
@@ -109,7 +127,6 @@ static int check_main_spool_dir(const char *spoolpath) {
  * Create the "metadata" and "pcaps" directories if they are not there.
  */
 static int pcap_create_spool_dir(const char *spoolpath) {
-	struct stat info;
 	int spool_good = TRUE;
 
 	if (!check_main_spool_dir(spoolpath))
@@ -119,24 +136,17 @@ static int pcap_create_spool_dir(const char *spoolpath) {
 	int path_len = strlen(spoolpath);
 	char meta_path[path_len + 10];
 	char rec_path[path_len + 7];
-	snprintf(meta_path, path_len + 10, "%s/metadata", spoolpath);
-	snprintf(rec_path, path_len + 7, "%s/pcaps", spoolpath);
+	char tmp_path[path_len + 5];
+	snprintf(meta_path, sizeof(meta_path), "%s/metadata", spoolpath);
+	snprintf(rec_path, sizeof(rec_path), "%s/pcaps", spoolpath);
+	snprintf(tmp_path, sizeof(tmp_path), "%s/tmp", spoolpath);
 
-	if (stat(meta_path, &info) != 0) {
-		fprintf(stdout, "Creating metadata directory \"%s\".\n", meta_path);
-		mkdir(meta_path, 0777);
-	} else if(!S_ISDIR(info.st_mode)) {
-		fprintf(stderr, "metadata file exists, but \"%s\" is not a directory.\n", meta_path);
+	if (!check_create_dir(meta_path, "metadata"))
 		spool_good = FALSE;
-	}
-
-	if (stat(rec_path, &info) != 0) {
-		fprintf(stdout, "Creating pcaps directory \"%s\".\n", rec_path);
-		mkdir(rec_path, 0777);
-	} else if(!S_ISDIR(info.st_mode)) {
-		fprintf(stderr, "pcaps file exists, but \"%s\" is not a directory.\n", rec_path);
+	if (!check_create_dir(rec_path, "pcaps"))
 		spool_good = FALSE;
-	}
+	if (!check_create_dir(tmp_path, "tmp"))
+		spool_good = FALSE;
 
 	return spool_good;
 }
@@ -167,11 +177,11 @@ static void pcap_init(struct call *call) {
 	meta_setup_file(recording, &call->callid);
 
 	// set up pcap file
-	str *pcap_path = recording_setup_file(recording, &call->callid);
+	char *pcap_path = recording_setup_file(recording, &call->callid);
 	if (pcap_path != NULL && recording->pcap.recording_pdumper != NULL
 	    && recording->pcap.meta_fp) {
 		// Write the location of the PCAP file to the metadata file
-		fprintf(recording->pcap.meta_fp, "%s\n\n", pcap_path->s);
+		fprintf(recording->pcap.meta_fp, "%s\n\n", pcap_path);
 	}
 }
 
@@ -212,40 +222,45 @@ static int set_record_call(struct call *call, str recordcall) {
 	return call->record_call;
 }
 
+static char *rand_file_path_str(const str *callid, const char *prefix, const char *suffix) {
+	const int rand_bytes = 8;
+	char rand_str[rand_bytes * 2 + 1];
+
+	rand_hex_str(rand_str, rand_bytes);
+
+	// We don't want weird characters like ":" or "@" showing up in filenames
+	char *escaped = g_uri_escape_string(callid->s, NULL, 0);
+
+	char *ret;
+	if (asprintf(&ret, "%s%s%s-%s%s", spooldir, prefix, escaped, rand_str, suffix) < 0)
+		abort();
+
+	free(escaped);
+	return ret;
+}
+
 /**
  * Create a call metadata file in a temporary location.
  * Attaches the filepath and the file pointer to the call struct.
  */
-static str *meta_setup_file(struct recording *recording, const str *callid) {
+static char *meta_setup_file(struct recording *recording, const str *callid) {
 	if (spooldir == NULL) {
 		// No spool directory was created, so we cannot have metadata files.
 		return NULL;
 	}
 
-	int rand_bytes = 8;
-	str *meta_filepath = malloc(sizeof(str));
-	// We don't want weird characters like ":" or "@" showing up in filenames
-	char *escaped_callid = g_uri_escape_string(callid->s, NULL, 0);
-	int escaped_callid_len = strlen(escaped_callid);
-	// Length for spool directory path + "/tmp/rtpengine-meta-${CALLID}-"
-	int mid_len = 20 + escaped_callid_len + 1 + 1;
-	char suffix_chars[mid_len];
-	snprintf(suffix_chars, mid_len, "/tmp/rtpengine-meta-%s-", escaped_callid);
-	free(escaped_callid);
-	// Initially file extension is ".tmp". When call is over, it changes to ".txt".
-	char *path_chars = rand_affixed_str(suffix_chars, rand_bytes, ".tmp");
-	meta_filepath = str_init(meta_filepath, path_chars);
+	char *meta_filepath = rand_file_path_str(callid, "/tmp/rtpengine-meta-", ".tmp");
 	recording->pcap.meta_filepath = meta_filepath;
-	FILE *mfp = fopen(meta_filepath->s, "w");
-	chmod(meta_filepath->s, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+	FILE *mfp = fopen(meta_filepath, "w");
+	chmod(meta_filepath, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
 	if (mfp == NULL) {
-		ilog(LOG_ERROR, "Could not open metadata file: %s", meta_filepath->s);
-		free(recording->pcap.meta_filepath->s);
-		free(recording->pcap.meta_filepath);
+		ilog(LOG_ERROR, "Could not open metadata file: %s", meta_filepath);
+		free(meta_filepath);
 		recording->pcap.meta_filepath = NULL;
+		return NULL;
 	}
 	recording->pcap.meta_fp = mfp;
-	ilog(LOG_DEBUG, "Wrote metadata file to temporary path: %s", meta_filepath->s);
+	ilog(LOG_DEBUG, "Wrote metadata file to temporary path: %s", meta_filepath);
 	return meta_filepath;
 }
 
@@ -310,10 +325,10 @@ static int meta_finish_file(struct call *call) {
 		// and move it to the finished file location.
 		// Rename extension to ".txt".
 		int fn_len;
-		char *meta_filename = strrchr(recording->pcap.meta_filepath->s, '/');
+		char *meta_filename = strrchr(recording->pcap.meta_filepath, '/');
 		char *meta_ext = NULL;
 		if (meta_filename == NULL) {
-			meta_filename = recording->pcap.meta_filepath->s;
+			meta_filename = recording->pcap.meta_filepath;
 		}
 		else {
 			meta_filename = meta_filename + 1;
@@ -326,19 +341,18 @@ static int meta_finish_file(struct call *call) {
 		char new_metapath[prefix_len + fn_len + ext_len + 1];
 		snprintf(new_metapath, prefix_len+fn_len+1, "%s/metadata/%s", spooldir, meta_filename);
 		snprintf(new_metapath + prefix_len+fn_len, ext_len+1, ".txt");
-		return_code = return_code || rename(recording->pcap.meta_filepath->s, new_metapath);
+		return_code = return_code || rename(recording->pcap.meta_filepath, new_metapath);
 		if (return_code != 0) {
 			ilog(LOG_ERROR, "Could not move metadata file \"%s\" to \"%s/metadata/\"",
-					 recording->pcap.meta_filepath->s, spooldir);
+					 recording->pcap.meta_filepath, spooldir);
 		} else {
 			ilog(LOG_INFO, "Moved metadata file \"%s\" to \"%s/metadata\"",
-					 recording->pcap.meta_filepath->s, spooldir);
+					 recording->pcap.meta_filepath, spooldir);
 		}
 	} else {
 		ilog(LOG_INFO, "Trying to clean up recording meta file without a file pointer opened.");
 	}
 	if (recording != NULL && recording->pcap.meta_filepath != NULL) {
-		free(recording->pcap.meta_filepath->s);
 		free(recording->pcap.meta_filepath);
 	}
 	mutex_destroy(&recording->pcap.recording_lock);
@@ -350,37 +364,25 @@ static int meta_finish_file(struct call *call) {
  * Generate a random PCAP filepath to write recorded RTP stream.
  * Returns path to created file.
  */
-static str *recording_setup_file(struct recording *recording, const str *callid) {
-	str *recording_path = NULL;
+static char *recording_setup_file(struct recording *recording, const str *callid) {
+	char *recording_path = NULL;
 
 	if (!spooldir)
 		return NULL;
 	if (recording->pcap.recording_pd || recording->pcap.recording_pdumper)
 		return NULL;
 
-	int rand_bytes = 8;
-	// We don't want weird characters like ":" or "@" showing up in filenames
-	char *escaped_callid = g_uri_escape_string(callid->s, NULL, 0);
-	int escaped_callid_len = strlen(escaped_callid);
-	// Length for spool directory path + "/pcaps/${CALLID}-"
-	int rec_path_len = strlen(spooldir) + 7 + escaped_callid_len + 1 + 1;
-	char rec_path[rec_path_len];
-	snprintf(rec_path, rec_path_len, "%s/pcaps/%s-", spooldir, escaped_callid);
-	free(escaped_callid);
-	char *path_chars = rand_affixed_str(rec_path, rand_bytes, ".pcap");
-
-	recording_path = malloc(sizeof(str));
-	recording_path = str_init(recording_path, path_chars);
+	recording_path = rand_file_path_str(callid, "/pcaps/", ".pcap");
 	recording->pcap.recording_path = recording_path;
 
 	recording->pcap.recording_pd = pcap_open_dead(DLT_RAW, 65535);
-	recording->pcap.recording_pdumper = pcap_dump_open(recording->pcap.recording_pd, path_chars);
+	recording->pcap.recording_pdumper = pcap_dump_open(recording->pcap.recording_pd, recording_path);
 	if (recording->pcap.recording_pdumper == NULL) {
 		pcap_close(recording->pcap.recording_pd);
 		recording->pcap.recording_pd = NULL;
-		ilog(LOG_INFO, "Failed to write recording file: %s", recording_path->s);
+		ilog(LOG_INFO, "Failed to write recording file: %s", recording_path);
 	} else {
-		ilog(LOG_INFO, "Writing recording file: %s", recording_path->s);
+		ilog(LOG_INFO, "Writing recording file: %s", recording_path);
 	}
 
 	return recording_path;
@@ -393,7 +395,6 @@ static void recording_finish_file(struct recording *recording) {
 	if (recording->pcap.recording_pdumper != NULL) {
 		pcap_dump_flush(recording->pcap.recording_pdumper);
 		pcap_dump_close(recording->pcap.recording_pdumper);
-		free(recording->pcap.recording_path->s);
 		free(recording->pcap.recording_path);
 	}
 	if (recording->pcap.recording_pd != NULL) {
@@ -472,7 +473,7 @@ static void dump_packet_pcap(struct recording *recording, struct packet_stream *
 	mutex_unlock(&recording->pcap.recording_lock);
 }
 
-void recording_finish_pcap(struct call *call) {
+static void finish_pcap(struct call *call) {
 	recording_finish_file(call->recording);
 	meta_finish_file(call);
 }

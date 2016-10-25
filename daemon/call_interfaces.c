@@ -760,7 +760,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	// XXX clean this up
 	bencode_item_t *recordings = bencode_dictionary_add_list(output, "recordings");
 	if (call->recording != NULL && call->recording->pcap.recording_path != NULL) {
-		char *recording_path = call->recording->pcap.recording_path->s;
+		char *recording_path = call->recording->pcap.recording_path;
 		bencode_list_add_string(recordings, recording_path);
 	}
 
