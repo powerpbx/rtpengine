@@ -15,13 +15,14 @@
 
 static int pcap_create_spool_dir(const char *dirpath);
 static int check_main_spool_dir(const char *spoolpath);
+static str *recording_setup_file(struct recording *recording, const str *callid);
+static str *meta_setup_file(struct recording *recording, str callid);
 
 static void pcap_init(struct call *);
-
 static ssize_t meta_write_sdp_pcap(struct recording *, struct iovec *sdp_iov, int iovcnt,
 		       enum call_opmode opmode);
-
 static void dump_packet_pcap(struct recording *recording, struct packet_stream *sink, str *s);
+static void recording_finish_pcap(struct call *);
 
 static int set_record_call(struct call *call, str recordcall);
 
@@ -34,6 +35,7 @@ static const struct recording_method methods[] = {
 		.init_struct = pcap_init,
 		.write_meta_sdp = meta_write_sdp_pcap,
 		.dump_packet = dump_packet_pcap,
+		.finish = recording_finish_pcap,
 	},
 	{
 		.name = "proc",
@@ -169,7 +171,7 @@ static void pcap_init(struct call *call) {
 	meta_setup_file(recording, call->callid);
 
 	// set up pcap file
-	str *pcap_path = recording_setup_file(recording, call->callid);
+	str *pcap_path = recording_setup_file(recording, &call->callid);
 	if (pcap_path != NULL && recording->pcap.recording_pdumper != NULL
 	    && recording->pcap.meta_fp) {
 		// Write the location of the PCAP file to the metadata file
@@ -218,7 +220,7 @@ static int set_record_call(struct call *call, str recordcall) {
  * Create a call metadata file in a temporary location.
  * Attaches the filepath and the file pointer to the call struct.
  */
-str *meta_setup_file(struct recording *recording, str callid) {
+static str *meta_setup_file(struct recording *recording, str callid) {
 	if (spooldir == NULL) {
 		// No spool directory was created, so we cannot have metadata files.
 		return NULL;
@@ -282,7 +284,7 @@ static ssize_t meta_write_sdp_pcap(struct recording *recording, struct iovec *sd
  * Writes metadata to metafile, closes file, and renames it to finished location.
  * Returns non-zero for failure.
  */
-int meta_finish_file(struct call *call) {
+static int meta_finish_file(struct call *call) {
 	// This should usually be called from a place that has the call->master_lock
 	struct recording *recording = call->recording;
 	int return_code = 0;
@@ -352,39 +354,37 @@ int meta_finish_file(struct call *call) {
  * Generate a random PCAP filepath to write recorded RTP stream.
  * Returns path to created file.
  */
-str *recording_setup_file(struct recording *recording, str callid) {
+static str *recording_setup_file(struct recording *recording, const str *callid) {
 	str *recording_path = NULL;
-	if (spooldir != NULL
-      && recording != NULL
-	    && recording->pcap.recording_pd == NULL && recording->pcap.recording_pdumper == NULL) {
-		int rand_bytes = 8;
-		// We don't want weird characters like ":" or "@" showing up in filenames
-		char *escaped_callid = curl_easy_escape(curl, callid.s, callid.len);
-		int escaped_callid_len = strlen(escaped_callid);
-		// Length for spool directory path + "/pcaps/${CALLID}-"
-		int rec_path_len = strlen(spooldir) + 7 + escaped_callid_len + 1 + 1;
-		char rec_path[rec_path_len];
-		snprintf(rec_path, rec_path_len, "%s/pcaps/%s-", spooldir, escaped_callid);
-		curl_free(escaped_callid);
-		char *path_chars = rand_affixed_str(rec_path, rand_bytes, ".pcap");
 
-		recording_path = malloc(sizeof(str));
-		recording_path = str_init(recording_path, path_chars);
-		recording->pcap.recording_path = recording_path;
+	if (!spooldir)
+		return NULL;
+	if (recording->pcap.recording_pd || recording->pcap.recording_pdumper)
+		return NULL;
 
-		recording->pcap.recording_pd = pcap_open_dead(DLT_RAW, 65535);
-		recording->pcap.recording_pdumper = pcap_dump_open(recording->pcap.recording_pd, path_chars);
-		if (recording->pcap.recording_pdumper == NULL) {
-			pcap_close(recording->pcap.recording_pd);
-			recording->pcap.recording_pd = NULL;
-			ilog(LOG_INFO, "Failed to write recording file: %s", recording_path->s);
-		} else {
-			ilog(LOG_INFO, "Writing recording file: %s", recording_path->s);
-		}
-	} else if (recording != NULL) {
-		recording->pcap.recording_path = NULL;
+	int rand_bytes = 8;
+	// We don't want weird characters like ":" or "@" showing up in filenames
+	char *escaped_callid = curl_easy_escape(curl, callid->s, callid->len);
+	int escaped_callid_len = strlen(escaped_callid);
+	// Length for spool directory path + "/pcaps/${CALLID}-"
+	int rec_path_len = strlen(spooldir) + 7 + escaped_callid_len + 1 + 1;
+	char rec_path[rec_path_len];
+	snprintf(rec_path, rec_path_len, "%s/pcaps/%s-", spooldir, escaped_callid);
+	curl_free(escaped_callid);
+	char *path_chars = rand_affixed_str(rec_path, rand_bytes, ".pcap");
+
+	recording_path = malloc(sizeof(str));
+	recording_path = str_init(recording_path, path_chars);
+	recording->pcap.recording_path = recording_path;
+
+	recording->pcap.recording_pd = pcap_open_dead(DLT_RAW, 65535);
+	recording->pcap.recording_pdumper = pcap_dump_open(recording->pcap.recording_pd, path_chars);
+	if (recording->pcap.recording_pdumper == NULL) {
+		pcap_close(recording->pcap.recording_pd);
 		recording->pcap.recording_pd = NULL;
-		recording->pcap.recording_pdumper = NULL;
+		ilog(LOG_INFO, "Failed to write recording file: %s", recording_path->s);
+	} else {
+		ilog(LOG_INFO, "Writing recording file: %s", recording_path->s);
 	}
 
 	return recording_path;
@@ -393,7 +393,7 @@ str *recording_setup_file(struct recording *recording, str callid) {
 /**
  * Flushes PCAP file, closes the dumper and descriptors, and frees object memory.
  */
-void recording_finish_file(struct recording *recording) {
+static void recording_finish_file(struct recording *recording) {
 	if (recording->pcap.recording_pdumper != NULL) {
 		pcap_dump_flush(recording->pcap.recording_pdumper);
 		pcap_dump_close(recording->pcap.recording_pdumper);
@@ -474,4 +474,9 @@ static void dump_packet_pcap(struct recording *recording, struct packet_stream *
 	stream_pcap_dump(recording->pcap.recording_pdumper, stream, s);
 	recording->pcap.packet_num++;
 	mutex_unlock(&recording->pcap.recording_lock);
+}
+
+void recording_finish_pcap(struct call *call) {
+	recording_finish_file(call->recording);
+	meta_finish_file(call);
 }

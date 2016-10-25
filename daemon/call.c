@@ -2250,9 +2250,9 @@ void call_destroy(struct call *c) {
 	}
 
 	if (c->recording != NULL) {
-		recording_finish_file(c->recording);
-		meta_finish_file(c);
+		recording_finish(c);
 		g_slice_free1(sizeof(*(c->recording)), c->recording);
+		c->recording = NULL;
 	}
 
 

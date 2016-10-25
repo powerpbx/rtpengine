@@ -39,11 +39,16 @@ struct recording_method {
 	void (*init_struct)(struct call *);
 	ssize_t (*write_meta_sdp)(struct recording *, struct iovec *, int, enum call_opmode);
 	void (*dump_packet)(struct recording *, struct packet_stream *sink, str *s);
+	void (*finish)(struct call *);
 };
 
 extern const struct recording_method *selected_recording_method;
 
 #define _rm(call, args...) selected_recording_method->call(args)
+#define _rm_chk1(call, recording) do { \
+		if (recording) \
+			selected_recording_method->call(recording); \
+	} while (0)
 #define _rm_chk(call, recording, args...) do { \
 		if (recording) \
 			selected_recording_method->call(recording, args); \
@@ -101,7 +106,7 @@ int detect_setup_recording(struct call *call, str recordcall);
  * ${CALL_ID}-${RAND-HEX}.pcap
  *
  */
-str *meta_setup_file(struct recording *recording, str callid);
+//str *meta_setup_file(struct recording *recording, str callid);
 
 /**
  * Write out a block of SDP to the metadata file.
@@ -116,21 +121,15 @@ str *meta_setup_file(struct recording *recording, str callid);
  *
  * Metadata files are moved to ${RECORDING_DIR}/metadata/
  */
-int meta_finish_file(struct call *call);
-
-/**
- * Generate a random PCAP filepath to write recorded RTP stream.
- * Returns path to created file.
- *
- * Files go in ${RECORDING_DIR}/pcaps, and are named like:
- * ${CALL_ID}-${RAND-HEX}.pcap
- */
-str *recording_setup_file(struct recording *recording, str callid);
+// int meta_finish_file(struct call *call);
 
 /**
  * Flushes PCAP file, closes the dumper and descriptors, and frees object memory.
  */
-void recording_finish_file(struct recording *recording);
+// void recording_finish_file(struct recording *recording);
+
+// combines the two calls above
+#define recording_finish(args...) _rm(finish, args)
 
 /**
  * Write out a PCAP packet with payload string.
