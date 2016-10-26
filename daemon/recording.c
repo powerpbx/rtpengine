@@ -13,18 +13,17 @@
 
 
 
-static int pcap_create_spool_dir(const char *dirpath);
 static int check_main_spool_dir(const char *spoolpath);
 static char *recording_setup_file(struct recording *recording, const str *callid);
 static char *meta_setup_file(struct recording *recording, const str *callid);
 
+// pcap methods
+static int pcap_create_spool_dir(const char *dirpath);
 static void pcap_init(struct call *);
 static ssize_t meta_write_sdp_pcap(struct recording *, struct iovec *sdp_iov, int iovcnt,
 		       enum call_opmode opmode);
 static void dump_packet_pcap(struct recording *recording, struct packet_stream *sink, str *s);
 static void finish_pcap(struct call *);
-
-static int set_record_call(struct call *call, str recordcall);
 
 
 
@@ -39,7 +38,7 @@ static const struct recording_method methods[] = {
 	},
 	{
 		.name = "proc",
-		.create_spool_dir = check_main_spool_dir,
+		.create_spool_dir = pcap_create_spool_dir,
 	},
 };
 
@@ -80,30 +79,21 @@ found:
 		spooldir[path_len-1] = '\0';
 	}
 	if (!_rm(create_spool_dir, spooldir)) {
+		// XXX replace fprintf with ilog
 		fprintf(stderr, "Error while setting up spool directory \"%s\".\n", spooldir);
 		fprintf(stderr, "Please run `mkdir %s` and start rtpengine again.\n", spooldir);
 		exit(-1);
 	}
 }
 
-static int check_main_spool_dir(const char *spoolpath) {
-	struct stat info;
-
-	if (stat(spoolpath, &info) != 0) {
-		fprintf(stderr, "Spool directory \"%s\" does not exist.\n", spoolpath);
-		return FALSE;
-	}
-	if (!S_ISDIR(info.st_mode)) {
-		fprintf(stderr, "Spool file exists, but \"%s\" is not a directory.\n", spoolpath);
-		return FALSE;
-	}
-	return TRUE;
-}
-
-static int check_create_dir(const char *dir, const char *desc) {
+static int check_create_dir(const char *dir, const char *desc, int creat) {
 	struct stat info;
 
 	if (stat(dir, &info) != 0) {
+		if (!creat) {
+			fprintf(stderr, "%s directory \"%s\" does not exist.\n", desc, dir);
+			return FALSE;
+		}
 		fprintf(stdout, "Creating %s directory \"%s\".\n", desc, dir);
 		if (mkdir(dir, 0777) == 0)
 			return TRUE;
@@ -115,6 +105,10 @@ static int check_create_dir(const char *dir, const char *desc) {
 		return FALSE;
 	}
 	return TRUE;
+}
+
+static int check_main_spool_dir(const char *spoolpath) {
+	return check_create_dir(spoolpath, "spool", 0);
 }
 
 /**
@@ -141,11 +135,11 @@ static int pcap_create_spool_dir(const char *spoolpath) {
 	snprintf(rec_path, sizeof(rec_path), "%s/pcaps", spoolpath);
 	snprintf(tmp_path, sizeof(tmp_path), "%s/tmp", spoolpath);
 
-	if (!check_create_dir(meta_path, "metadata"))
+	if (!check_create_dir(meta_path, "metadata", 1))
 		spool_good = FALSE;
-	if (!check_create_dir(rec_path, "pcaps"))
+	if (!check_create_dir(rec_path, "pcaps", 1))
 		spool_good = FALSE;
-	if (!check_create_dir(tmp_path, "tmp"))
+	if (!check_create_dir(tmp_path, "tmp", 1))
 		spool_good = FALSE;
 
 	return spool_good;
@@ -162,37 +156,6 @@ static int pcap_create_spool_dir(const char *spoolpath) {
  * Returns a boolean for whether or not the call is being recorded.
  */
 int detect_setup_recording(struct call *call, str recordcall) {
-	int is_recording = set_record_call(call, recordcall);
-	return is_recording;
-}
-
-static void pcap_init(struct call *call) {
-	struct recording *recording = call->recording;
-
-	//recording->recording_pd = NULL;
-	//recording->recording_pdumper = NULL;
-	// Wireshark starts at packet index 1, so we start there, too
-	recording->pcap.packet_num = 1;
-	mutex_init(&recording->pcap.recording_lock);
-	meta_setup_file(recording, &call->callid);
-
-	// set up pcap file
-	char *pcap_path = recording_setup_file(recording, &call->callid);
-	if (pcap_path != NULL && recording->pcap.recording_pdumper != NULL
-	    && recording->pcap.meta_fp) {
-		// Write the location of the PCAP file to the metadata file
-		fprintf(recording->pcap.meta_fp, "%s\n\n", pcap_path);
-	}
-}
-
-/**
- * Controls the setting of recording variables on a `struct call *`.
- * Sets the `record_call` value on the `struct call`, initializing the
- * recording struct if necessary.
- *
- * Returns a boolean for whether or not the call is being recorded.
- */
-static int set_record_call(struct call *call, str recordcall) {
 	if (!str_cmp(&recordcall, "yes")) {
 		if (call->record_call == FALSE) {
 			if (!spooldir) {
@@ -220,6 +183,25 @@ static int set_record_call(struct call *call, str recordcall) {
 		ilog(LOG_INFO, "\"record-call\" flag %s is invalid flag.", recordcall.s);
 	}
 	return call->record_call;
+}
+
+static void pcap_init(struct call *call) {
+	struct recording *recording = call->recording;
+
+	//recording->recording_pd = NULL;
+	//recording->recording_pdumper = NULL;
+	// Wireshark starts at packet index 1, so we start there, too
+	recording->pcap.packet_num = 1;
+	mutex_init(&recording->pcap.recording_lock);
+	meta_setup_file(recording, &call->callid);
+
+	// set up pcap file
+	char *pcap_path = recording_setup_file(recording, &call->callid);
+	if (pcap_path != NULL && recording->pcap.recording_pdumper != NULL
+	    && recording->pcap.meta_fp) {
+		// Write the location of the PCAP file to the metadata file
+		fprintf(recording->pcap.meta_fp, "%s\n\n", pcap_path);
+	}
 }
 
 static char *rand_file_path_str(const str *callid, const char *prefix, const char *suffix) {
