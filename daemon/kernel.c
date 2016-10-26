@@ -52,7 +52,7 @@ int kernel_open_table(unsigned int id) {
 	int i;
 
 	sprintf(str, PREFIX "/%u/control", id);
-	fd = open(str, O_WRONLY | O_TRUNC);
+	fd = open(str, O_RDWR | O_TRUNC);
 	if (fd == -1)
 		return -1;
 
@@ -127,4 +127,32 @@ GList *kernel_list(unsigned int id) {
 	close(fd);
 
 	return li;
+}
+
+unsigned int kernel_add_call(int fd, const char *id) {
+	struct rtpengine_message msg;
+	int ret;
+
+	ZERO(msg);
+	msg.cmd = REMG_ADD_CALL;
+	snprintf(msg.u.call.call_id, sizeof(msg.u.call.call_id), "%s", id);
+
+	ret = read(fd, &msg, sizeof(msg));
+	if (ret != sizeof(msg))
+		return UNINIT_IDX;
+	return msg.u.call.call_idx;
+}
+
+int kernel_del_call(int fd, unsigned int idx) {
+	struct rtpengine_message msg;
+	int ret;
+
+	ZERO(msg);
+	msg.cmd = REMG_DEL_CALL;
+	msg.u.call.call_idx = idx;
+
+	ret = write(fd, &msg, sizeof(msg));
+	if (ret != sizeof(msg))
+		return -1;
+	return 0;
 }

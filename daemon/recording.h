@@ -15,7 +15,6 @@
 
 
 struct recording_pcap {
-	char          *meta_filepath;
 	FILE          *meta_fp;
 	pcap_t        *recording_pd;
 	pcap_dumper_t *recording_pdumper;
@@ -24,20 +23,29 @@ struct recording_pcap {
 
 	mutex_t       recording_lock;
 };
+struct recording_proc {
+	unsigned int call_idx;
+};
 
 struct recording {
 	union {
 		struct recording_pcap pcap;
+		struct recording_proc proc;
 	};
 
-	str           *metadata;
+	str		*metadata; // from controlling daemon
+	char		*escaped_callid; // call-id with dangerous characters escaped
+	char		*meta_prefix; // escaped call-id plus random suffix
+	char		*meta_filepath; // full file path
 };
 
 struct recording_method {
 	const char *name;
+	int kernel_support;
+
 	int (*create_spool_dir)(const char *);
 	void (*init_struct)(struct call *);
-	ssize_t (*write_meta_sdp)(struct recording *, struct iovec *, int, enum call_opmode);
+	ssize_t (*write_meta_sdp)(struct recording *, struct iovec *, int, unsigned int, enum call_opmode);
 	void (*dump_packet)(struct recording *, struct packet_stream *sink, str *s);
 	void (*finish)(struct call *);
 };
@@ -129,7 +137,7 @@ int detect_setup_recording(struct call *call, str recordcall);
 // void recording_finish_file(struct recording *recording);
 
 // combines the two calls above
-#define recording_finish(args...) _rm(finish, args)
+void recording_finish(struct call *);
 
 /**
  * Write out a PCAP packet with payload string.

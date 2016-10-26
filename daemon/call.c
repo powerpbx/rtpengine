@@ -2249,12 +2249,7 @@ void call_destroy(struct call *c) {
 		obj_put(sfd);
 	}
 
-	if (c->recording != NULL) {
-		recording_finish(c);
-		g_slice_free1(sizeof(*(c->recording)), c->recording);
-		c->recording = NULL;
-	}
-
+	recording_finish(c);
 
 	rwlock_unlock_w(&c->master_lock);
 }

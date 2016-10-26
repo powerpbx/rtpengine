@@ -863,7 +863,9 @@ void kernelize(struct packet_stream *stream) {
 	struct packet_stream *sink = NULL;
 	const char *nk_warn_msg;
 
-	if (PS_ISSET(stream, KERNELIZED) || call->recording != NULL)
+	if (PS_ISSET(stream, KERNELIZED))
+		return;
+	if (call->recording != NULL && !selected_recording_method->kernel_support)
 		return;
 	if (cm->conf.kernelid < 0)
 		goto no_kernel;
