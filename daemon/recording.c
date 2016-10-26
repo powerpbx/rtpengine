@@ -171,39 +171,38 @@ static int pcap_create_spool_dir(const char *spoolpath) {
  */
 int detect_setup_recording(struct call *call, str recordcall) {
 	if (!str_cmp(&recordcall, "yes")) {
-		if (call->record_call == FALSE) {
-			if (!spooldir) {
-				ilog(LOG_ERR, "Call recording requested, but no spool directory configured");
-				return FALSE;
-			}
-			ilog(LOG_NOTICE, "Turning on call recording.");
+		if (call->recording) // already active
+			return TRUE;
+
+		if (!spooldir) {
+			ilog(LOG_ERR, "Call recording requested, but no spool directory configured");
+			return FALSE;
 		}
-		call->record_call = TRUE;
-		if (call->recording == NULL) {
-			call->recording = g_slice_alloc0(sizeof(struct recording));
-			struct recording *recording = call->recording;
-			recording->escaped_callid = g_uri_escape_string(call->callid.s, NULL, 0);
-			const int rand_bytes = 8;
-			char rand_str[rand_bytes * 2 + 1];
-			rand_hex_str(rand_str, rand_bytes);
-			if (asprintf(&recording->meta_prefix, "%s-%s", recording->escaped_callid, rand_str) < 0)
-				abort();
-			_rm(init_struct, call);
-		}
+		ilog(LOG_NOTICE, "Turning on call recording.");
+
+		call->recording = g_slice_alloc0(sizeof(struct recording));
+		struct recording *recording = call->recording;
+		recording->escaped_callid = g_uri_escape_string(call->callid.s, NULL, 0);
+		const int rand_bytes = 8;
+		char rand_str[rand_bytes * 2 + 1];
+		rand_hex_str(rand_str, rand_bytes);
+		if (asprintf(&recording->meta_prefix, "%s-%s", recording->escaped_callid, rand_str) < 0)
+			abort();
+		_rm(init_struct, call);
 
 		return TRUE;
 	}
 
 	if (!str_cmp(&recordcall, "no")) {
-		if (call->record_call == TRUE) {
-			ilog(LOG_NOTICE, "Turning off call recording.");
-		}
-		call->record_call = FALSE;
-		// XXX close, free and terminate structures here?
+		if (!call->recording)
+			return FALSE;
+
+		ilog(LOG_NOTICE, "Turning off call recording.");
+		recording_finish(call);
 	} else {
-		ilog(LOG_INFO, "\"record-call\" flag %s is invalid flag.", recordcall.s);
+		ilog(LOG_INFO, "\"record-call\" flag "STR_FORMAT" is invalid flag.", STR_FMT(&recordcall));
 	}
-	return call->record_call;
+	return call->recording ? TRUE : FALSE;
 }
 
 static void pcap_init(struct call *call) {

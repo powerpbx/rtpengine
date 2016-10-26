@@ -1231,7 +1231,7 @@ loop_ok:
 	}
 
 	// If recording pcap dumper is set, then we record the call.
-	if (call->record_call) {
+	if (call->recording) {
 		dump_packet(call->recording, stream, s);
 	}
 

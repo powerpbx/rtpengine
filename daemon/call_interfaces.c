@@ -744,7 +744,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	struct iovec *sdp_iov = &g_array_index(chopper->iov, struct iovec, 0);
 
 	struct recording *recording = call->recording;
-	if (call->record_call && recording != NULL) {
+	if (recording != NULL) {
 		// XXX add before/after SDP
 		// XXX remove iov dependency?
 		meta_write_sdp(recording, sdp_iov, chopper->iov_num, chopper->str_len,
