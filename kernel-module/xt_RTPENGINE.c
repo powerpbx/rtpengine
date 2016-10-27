@@ -2649,20 +2649,22 @@ static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t
 		goto out;
 	}
 
-	DBG("removing packet from queue\n");
+	DBG("removing packet from queue, reading %i bytes\n", (int) l);
 	packet = list_first_entry(&stream->packet_list, struct re_stream_packet, list_entry);
 	list_del(&packet->list_entry);
 	stream->list_count--;
 
 	spin_unlock_irqrestore(&stream->packet_list_lock, flags);
 
-	if (packet->buf) {
+	if (packet->buflen) {
 		ret = packet->buflen;
 		to_copy = packet->buf;
+		DBG("packet is from userspace, %i bytes\n", (int) ret);
 	}
 	else if (packet->skbuf) {
 		ret = packet->skbuf->len;
 		to_copy = packet->skbuf->data;
+		DBG("packet is from kernel, %i bytes\n", (int) ret);
 	}
 	else {
 		ret = -ENXIO;
@@ -2758,6 +2760,9 @@ static int stream_packet(struct rtpengine_table *t, const struct rtpengine_packe
 	struct re_stream *stream;
 	int err;
 	struct re_stream_packet *packet;
+
+	if (!len) /* can't have empty packets */
+		return -EINVAL;
 
 	DBG("received %u bytes of data from userspace\n", len);
 

@@ -851,6 +851,7 @@ struct packet_stream *__packet_stream_new(struct call *call) {
 	stream->call = call;
 	atomic64_set_na(&stream->last_packet, poller_now);
 	stream->rtp_stats = g_hash_table_new_full(g_int_hash, g_int_equal, NULL, __rtp_stats_free);
+	recording_init_stream(stream);
 
 	return stream;
 }

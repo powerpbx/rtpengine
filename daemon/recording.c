@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <assert.h>
 
+#include "xt_RTPENGINE.h"
+
 #include "call.h"
 #include "kernel.h"
 
@@ -36,7 +38,9 @@ static ssize_t meta_write_sdp_proc(struct recording *, struct iovec *sdp_iov, in
 		       unsigned int str_len, enum call_opmode opmode);
 static void finish_proc(struct call *);
 static void dump_packet_proc(struct recording *recording, struct packet_stream *sink, const str *s);
+static void init_stream_proc(struct packet_stream *);
 static void setup_stream_proc(struct packet_stream *);
+static void kernel_info_proc(struct packet_stream *, struct rtpengine_target_info *);
 
 
 
@@ -49,7 +53,9 @@ static const struct recording_method methods[] = {
 		.write_meta_sdp = meta_write_sdp_pcap,
 		.dump_packet = dump_packet_pcap,
 		.finish = finish_pcap,
+		.init_stream_struct = dummy,
 		.setup_stream = dummy,
+		.stream_kernel_info = dummy,
 	},
 	{
 		.name = "proc",
@@ -59,7 +65,9 @@ static const struct recording_method methods[] = {
 		.write_meta_sdp = meta_write_sdp_proc,
 		.dump_packet = dump_packet_proc,
 		.finish = finish_proc,
+		.init_stream_struct = init_stream_proc,
 		.setup_stream = setup_stream_proc,
+		.stream_kernel_info = kernel_info_proc,
 	},
 };
 
@@ -546,15 +554,19 @@ static void finish_proc(struct call *call) {
 	// XXX unlink meta file??
 }
 
+static void init_stream_proc(struct packet_stream *stream) {
+	stream->recording.proc.stream_idx = UNINIT_IDX;
+}
+
 static void setup_stream_proc(struct packet_stream *stream) {
 	struct call *call = stream->call;
 	struct callmaster *cm = call->callmaster;
 
-	stream->recording.proc.stream_idx = UNINIT_IDX;
-
 	if (!call->recording)
 		return;
 	if (cm->conf.kernelfd < 0 || cm->conf.kernelid < 0)
+		return;
+	if (stream->recording.proc.stream_idx != UNINIT_IDX)
 		return;
 
 	char stream_id[128];
@@ -574,4 +586,32 @@ static void setup_stream_proc(struct packet_stream *stream) {
 }
 
 static void dump_packet_proc(struct recording *recording, struct packet_stream *stream, const str *s) {
+	if (stream->recording.proc.stream_idx == UNINIT_IDX)
+		return;
+
+	struct rtpengine_message *remsg;
+	unsigned char pkt[sizeof(*remsg) + s->len + MAX_PACKET_HEADER_LEN];
+	remsg = (void *) pkt;
+
+	ZERO(*remsg);
+	remsg->cmd = REMG_PACKET;
+	//remsg->u.packet.call_idx = stream->call->recording->proc.call_idx; // unused
+	remsg->u.packet.stream_idx = stream->recording.proc.stream_idx;
+
+	unsigned int pkt_len = fake_ip_header(remsg->data, stream, s);
+	pkt_len += sizeof(*remsg);
+
+	int ret = write(stream->call->callmaster->conf.kernelfd, pkt, pkt_len);
+	if (ret < 0)
+		ilog(LOG_ERR, "Failed to submit packet to kernel intercepted stream: %s", strerror(errno));
+}
+
+static void kernel_info_proc(struct packet_stream *stream, struct rtpengine_target_info *reti) {
+	if (!stream->call->recording)
+		return;
+	if (stream->recording.proc.stream_idx == UNINIT_IDX)
+		return;
+	ilog(LOG_DEBUG, "enabling kernel intercept with stream idx %u", stream->recording.proc.stream_idx);
+	reti->do_intercept = 1;
+	reti->intercept_stream_idx = stream->recording.proc.stream_idx;
 }

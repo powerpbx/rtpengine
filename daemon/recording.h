@@ -19,6 +19,7 @@
 struct packet_stream;
 struct call;
 enum call_opmode;
+struct rtpengine_target_info;
 
 
 struct recording_pcap {
@@ -66,7 +67,9 @@ struct recording_method {
 	void (*dump_packet)(struct recording *, struct packet_stream *sink, const str *s);
 	void (*finish)(struct call *);
 
+	void (*init_stream_struct)(struct packet_stream *);
 	void (*setup_stream)(struct packet_stream *);
+	void (*stream_kernel_info)(struct packet_stream *, struct rtpengine_target_info *);
 };
 
 extern const struct recording_method *selected_recording_method;
@@ -168,5 +171,7 @@ void recording_finish(struct call *);
 
 
 #define recording_setup_stream(args...) _rm(setup_stream, args)
+#define recording_init_stream(args...) _rm(init_stream_struct, args)
+#define recording_stream_kernel_info(args...) _rm(stream_kernel_info, args)
 
 #endif

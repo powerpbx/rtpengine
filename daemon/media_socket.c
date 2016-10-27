@@ -951,6 +951,8 @@ void kernelize(struct packet_stream *stream) {
 		g_list_free(values);
 	}
 
+	recording_stream_kernel_info(stream, &reti);
+
 	kernel_add_stream(cm->conf.kernelfd, &reti, 0);
 	PS_SET(stream, KERNELIZED);
 
