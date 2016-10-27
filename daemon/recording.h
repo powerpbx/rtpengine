@@ -63,7 +63,7 @@ struct recording_method {
 
 	int (*create_spool_dir)(const char *);
 	void (*init_struct)(struct call *);
-	ssize_t (*write_meta_sdp)(struct recording *, struct iovec *, int, unsigned int, enum call_opmode);
+	int (*write_meta_sdp)(struct recording *, struct iovec *, int, unsigned int, enum call_opmode);
 	void (*dump_packet)(struct recording *, struct packet_stream *sink, const str *s);
 	void (*finish)(struct call *);
 

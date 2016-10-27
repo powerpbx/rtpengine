@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <assert.h>
+#include <stdarg.h>
 
 #include "xt_RTPENGINE.h"
 
@@ -27,14 +28,14 @@ static void dummy();
 // pcap methods
 static int pcap_create_spool_dir(const char *dirpath);
 static void pcap_init(struct call *);
-static ssize_t meta_write_sdp_pcap(struct recording *, struct iovec *sdp_iov, int iovcnt,
+static int meta_write_sdp_pcap(struct recording *, struct iovec *sdp_iov, int iovcnt,
 		       unsigned int str_len, enum call_opmode opmode);
 static void dump_packet_pcap(struct recording *recording, struct packet_stream *sink, const str *s);
 static void finish_pcap(struct call *);
 
 // proc methods
 static void proc_init(struct call *);
-static ssize_t meta_write_sdp_proc(struct recording *, struct iovec *sdp_iov, int iovcnt,
+static int meta_write_sdp_proc(struct recording *, struct iovec *sdp_iov, int iovcnt,
 		       unsigned int str_len, enum call_opmode opmode);
 static void finish_proc(struct call *);
 static void dump_packet_proc(struct recording *recording, struct packet_stream *sink, const str *s);
@@ -281,12 +282,12 @@ static char *meta_setup_file(struct recording *recording) {
 /**
  * Write out a block of SDP to the metadata file.
  */
-static ssize_t meta_write_sdp_pcap(struct recording *recording, struct iovec *sdp_iov, int iovcnt,
+static int meta_write_sdp_pcap(struct recording *recording, struct iovec *sdp_iov, int iovcnt,
 		       unsigned int str_len, enum call_opmode opmode)
 {
 	FILE *meta_fp = recording->pcap.meta_fp;
 	if (!meta_fp)
-		return 0;
+		return -1;
 
 	int meta_fd = fileno(meta_fp);
 	// File pointers buffer data, whereas direct writing using the file
@@ -302,7 +303,7 @@ static ssize_t meta_write_sdp_pcap(struct recording *recording, struct iovec *sd
 	}
 	fprintf(meta_fp, "\nSDP before RTP packet: %" PRIu64 "\n\n", recording->pcap.packet_num);
 	fflush(meta_fp);
-	return writev(meta_fd, sdp_iov, iovcnt);
+	return (writev(meta_fd, sdp_iov, iovcnt) <= 0 ? -1 : 0);
 }
 
 /**
@@ -497,6 +498,72 @@ static int open_proc_meta_file(struct recording *recording) {
 	return fd;
 }
 
+static int vappend_meta_chunk_iov(struct recording *recording, struct iovec *in_iov, int iovcnt,
+		unsigned int str_len, const char *label_fmt, va_list ap)
+{
+	int fd = open_proc_meta_file(recording);
+	if (fd == -1)
+		return -1;
+
+	char label[128];
+	int lablen = vsnprintf(label, sizeof(label), label_fmt, ap);
+	char infix[128];
+	int inflen = snprintf(infix, sizeof(infix), "\n%u:\n", str_len);
+
+	// use writev for an atomic write
+	struct iovec iov[iovcnt + 3];
+	iov[0].iov_base = label;
+	iov[0].iov_len = lablen;
+	iov[1].iov_base = infix;
+	iov[1].iov_len = inflen;
+	memcpy(&iov[2], in_iov, iovcnt * sizeof(*iov));
+	iov[iovcnt + 2].iov_base = "\n\n";
+	iov[iovcnt + 2].iov_len = 2;
+
+	if (writev(fd, iov, iovcnt + 3) != (str_len + lablen + inflen + 2))
+		ilog(LOG_WARN, "writev return value incorrect");
+
+	close(fd); // this triggers the inotify
+
+	return 0;
+}
+
+static int append_meta_chunk_iov(struct recording *recording, struct iovec *iov, int iovcnt,
+		unsigned int str_len, const char *label_fmt, ...)
+	__attribute__((format(printf,5,6)));
+
+static int append_meta_chunk_iov(struct recording *recording, struct iovec *iov, int iovcnt,
+		unsigned int str_len, const char *label_fmt, ...)
+{
+	va_list ap;
+	va_start(ap, label_fmt);
+	int ret = vappend_meta_chunk_iov(recording, iov, iovcnt, str_len, label_fmt, ap);
+	va_end(ap);
+
+	return ret;
+}
+
+static int append_meta_chunk(struct recording *recording, const char *buf, unsigned int buflen,
+		const char *label_fmt, ...)
+	__attribute__((format(printf,4,5)));
+
+static int append_meta_chunk(struct recording *recording, const char *buf, unsigned int buflen,
+		const char *label_fmt, ...)
+{
+	struct iovec iov;
+	iov.iov_base = (void *) buf;
+	iov.iov_len = buflen;
+
+	va_list ap;
+	va_start(ap, label_fmt);
+	int ret = vappend_meta_chunk_iov(recording, &iov, 1, buflen, label_fmt, ap);
+	va_end(ap);
+
+	return ret;
+}
+#define append_meta_chunk_str(r, str, f...) append_meta_chunk(r, (str)->s, (str)->len, f)
+#define append_meta_chunk_s(r, str, f...) append_meta_chunk(r, (str), strlen(str), f)
+
 static void proc_init(struct call *call) {
 	struct recording *recording = call->recording;
 	struct callmaster *cm = call->callmaster;
@@ -515,32 +582,16 @@ static void proc_init(struct call *call) {
 
 	recording->meta_filepath = file_path_str(recording->meta_prefix, "/", ".meta");
 	unlink(recording->meta_filepath); // start fresh XXX good idea?
+
+	append_meta_chunk_str(recording, &call->callid, "CALL-ID");
+	append_meta_chunk_s(recording, recording->meta_prefix, "PARENT");
 }
 
-static ssize_t meta_write_sdp_proc(struct recording *recording, struct iovec *sdp_iov, int iovcnt,
+static int meta_write_sdp_proc(struct recording *recording, struct iovec *sdp_iov, int iovcnt,
 		       unsigned int str_len, enum call_opmode opmode)
 {
-	int fd = open_proc_meta_file(recording);
-	if (fd == -1)
-		return -1;
-
-	char buf[128];
-	int prlen = snprintf(buf, sizeof(buf), "SDP\n%u:\n", str_len); // XXX more details here
-
-	// use writev for an atomic write
-	struct iovec iov[iovcnt + 2];
-	iov[0].iov_base = buf;
-	iov[0].iov_len = prlen;
-	memcpy(&iov[1], sdp_iov, iovcnt * sizeof(*iov));
-	iov[iovcnt + 1].iov_base = "\n\n";
-	iov[iovcnt + 1].iov_len = 2;
-
-	if (writev(fd, iov, iovcnt + 2) != (str_len + prlen + 2))
-		ilog(LOG_WARN, "writev return value incorrect");
-
-	close(fd); // this triggers the inotify
-
-	return 0;
+	return append_meta_chunk_iov(recording, sdp_iov, iovcnt, str_len,
+			"SDP %s", (opmode == OP_OFFER ? "offer" : (opmode == OP_ANSWER ? "answer" : "other")));
 }
 
 static void finish_proc(struct call *call) {
@@ -561,8 +612,9 @@ static void init_stream_proc(struct packet_stream *stream) {
 static void setup_stream_proc(struct packet_stream *stream) {
 	struct call *call = stream->call;
 	struct callmaster *cm = call->callmaster;
+	struct recording *recording = call->recording;
 
-	if (!call->recording)
+	if (!recording)
 		return;
 	if (cm->conf.kernelfd < 0 || cm->conf.kernelid < 0)
 		return;
@@ -577,12 +629,13 @@ static void setup_stream_proc(struct packet_stream *stream) {
 			(PS_ISSET(stream, RTCP) && !PS_ISSET(stream, RTP)) ? "RTCP" : "RTP",
 			stream->unique_id);
 	stream->recording.proc.stream_idx = kernel_add_intercept_stream(cm->conf.kernelfd,
-			call->recording->proc.call_idx, stream_id);
+			recording->proc.call_idx, stream_id);
 	if (stream->recording.proc.stream_idx == UNINIT_IDX) {
 		ilog(LOG_ERR, "Failed to add stream to kernel recording interface: %s", strerror(errno));
 		return;
 	}
 	ilog(LOG_DEBUG, "kernel stream idx is %u", stream->recording.proc.stream_idx);
+	append_meta_chunk_s(recording, stream_id, "STREAM");
 }
 
 static void dump_packet_proc(struct recording *recording, struct packet_stream *stream, const str *s) {
