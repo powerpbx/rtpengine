@@ -14,10 +14,10 @@
 #include <pcre.h>
 #include <openssl/x509.h>
 #include <limits.h>
-#include <pcap.h>
 #include "compat.h"
 #include "socket.h"
 #include "media_socket.h"
+#include "recording.h"
 
 #define UNDEFINED ((unsigned int) -1)
 #define TRUNCATED " ... Output truncated. Increase Output Buffer ...                                    \n"
@@ -331,6 +331,7 @@ struct packet_stream {
 	struct call		*call;		/* RO */
 	unsigned int		component;	/* RO, starts with 1 */
 	unsigned int		unique_id;	/* RO */
+	struct recording_stream recording;	/* LOCK: call->master_lock */
 
 	GQueue			sfds;		/* LOCK: call->master_lock */
 	struct stream_fd * volatile selected_sfd;

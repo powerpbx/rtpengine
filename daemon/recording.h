@@ -11,7 +11,14 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <netinet/in.h>
-#include "call.h"
+#include <pcap.h>
+#include "str.h"
+#include "aux.h"
+
+
+struct packet_stream;
+struct call;
+enum call_opmode;
 
 
 struct recording_pcap {
@@ -23,8 +30,12 @@ struct recording_pcap {
 
 	mutex_t       recording_lock;
 };
+
 struct recording_proc {
 	unsigned int call_idx;
+};
+struct recording_stream_proc {
+	unsigned int stream_idx;
 };
 
 struct recording {
@@ -39,6 +50,12 @@ struct recording {
 	char		*meta_filepath; // full file path
 };
 
+struct recording_stream {
+	union {
+		struct recording_stream_proc proc;
+	};
+};
+
 struct recording_method {
 	const char *name;
 	int kernel_support;
@@ -48,6 +65,8 @@ struct recording_method {
 	ssize_t (*write_meta_sdp)(struct recording *, struct iovec *, int, unsigned int, enum call_opmode);
 	void (*dump_packet)(struct recording *, struct packet_stream *sink, str *s);
 	void (*finish)(struct call *);
+
+	void (*setup_stream)(struct packet_stream *);
 };
 
 extern const struct recording_method *selected_recording_method;
@@ -55,11 +74,11 @@ extern const struct recording_method *selected_recording_method;
 #define _rm(call, args...) selected_recording_method->call(args)
 #define _rm_chk1(call, recording) do { \
 		if (recording) \
-			selected_recording_method->call(recording); \
+			_rm(call, recording); \
 	} while (0)
 #define _rm_chk(call, recording, args...) do { \
 		if (recording) \
-			selected_recording_method->call(recording, args); \
+			_rm(call, recording, args); \
 	} while (0)
 
 
@@ -145,5 +164,9 @@ void recording_finish(struct call *);
  */
 // void dump_packet(struct recording *, struct packet_stream *, str *s);
 #define dump_packet(args...) _rm_chk(dump_packet, args)
+
+
+
+#define recording_setup_stream(args...) _rm(setup_stream, args)
 
 #endif

@@ -30,6 +30,8 @@ GList *kernel_list(unsigned int);
 unsigned int kernel_add_call(int fd, const char *id);
 int kernel_del_call(int fd, unsigned int);
 
+unsigned int kernel_add_intercept_stream(int fd, unsigned int call_idx, const char *id);
+
 
 
 

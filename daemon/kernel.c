@@ -156,3 +156,18 @@ int kernel_del_call(int fd, unsigned int idx) {
 		return -1;
 	return 0;
 }
+
+unsigned int kernel_add_intercept_stream(int fd, unsigned int call_idx, const char *id) {
+	struct rtpengine_message msg;
+	int ret;
+
+	ZERO(msg);
+	msg.cmd = REMG_ADD_STREAM;
+	msg.u.stream.call_idx = call_idx;
+	snprintf(msg.u.stream.stream_name, sizeof(msg.u.stream.stream_name), "%s", id);
+
+	ret = read(fd, &msg, sizeof(msg));
+	if (ret != sizeof(msg))
+		return UNINIT_IDX;
+	return msg.u.stream.stream_idx;
+}

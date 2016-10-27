@@ -1083,6 +1083,9 @@ static int __init_streams(struct call_media *A, struct call_media *B, const stru
 		if (__init_stream(a))
 			return -1;
 
+		recording_setup_stream(ax); // RTP
+		recording_setup_stream(a); // RTCP
+
 		la = la->next;
 		lb = lb->next;
 

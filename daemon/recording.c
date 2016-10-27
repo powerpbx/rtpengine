@@ -19,6 +19,7 @@
 static int check_main_spool_dir(const char *spoolpath);
 static char *recording_setup_file(struct recording *recording);
 static char *meta_setup_file(struct recording *recording);
+static void dummy();
 
 // pcap methods
 static int pcap_create_spool_dir(const char *dirpath);
@@ -33,6 +34,8 @@ static void proc_init(struct call *);
 static ssize_t meta_write_sdp_proc(struct recording *, struct iovec *sdp_iov, int iovcnt,
 		       unsigned int str_len, enum call_opmode opmode);
 static void finish_proc(struct call *);
+static void dump_packet_proc(struct recording *recording, struct packet_stream *sink, str *s);
+static void setup_stream_proc(struct packet_stream *);
 
 
 
@@ -45,6 +48,7 @@ static const struct recording_method methods[] = {
 		.write_meta_sdp = meta_write_sdp_pcap,
 		.dump_packet = dump_packet_pcap,
 		.finish = finish_pcap,
+		.setup_stream = dummy,
 	},
 	{
 		.name = "proc",
@@ -52,7 +56,9 @@ static const struct recording_method methods[] = {
 		.create_spool_dir = check_main_spool_dir,
 		.init_struct = proc_init,
 		.write_meta_sdp = meta_write_sdp_proc,
+		.dump_packet = dump_packet_proc,
 		.finish = finish_proc,
+		.setup_stream = setup_stream_proc,
 	},
 };
 
@@ -61,6 +67,13 @@ static const struct recording_method methods[] = {
 static char *spooldir = NULL;
 
 const struct recording_method *selected_recording_method;
+
+
+
+
+static void dummy() {
+	;
+}
 
 
 /**
@@ -486,6 +499,9 @@ void recording_finish(struct call *call) {
 
 
 
+
+
+
 static int open_proc_meta_file(struct recording *recording) {
 	int fd;
 	fd = open(recording->meta_filepath, O_WRONLY | O_APPEND | O_CREAT, 0666);
@@ -552,4 +568,34 @@ static void finish_proc(struct call *call) {
 	if (recording->proc.call_idx != UNINIT_IDX)
 		kernel_del_call(cm->conf.kernelfd, recording->proc.call_idx);
 	// XXX unlink meta file??
+}
+
+static void setup_stream_proc(struct packet_stream *stream) {
+	struct call *call = stream->call;
+	struct callmaster *cm = call->callmaster;
+
+	stream->recording.proc.stream_idx = UNINIT_IDX;
+
+	if (!call->recording)
+		return;
+	if (cm->conf.kernelfd < 0 || cm->conf.kernelid < 0)
+		return;
+
+	char stream_id[128];
+	// XXX include tag from/to
+	snprintf(stream_id, sizeof(stream_id), "media-%u-component-%u-%s-id-%u",
+			stream->media->index,
+			stream->component,
+			(PS_ISSET(stream, RTCP) && !PS_ISSET(stream, RTP)) ? "RTCP" : "RTP",
+			stream->unique_id);
+	stream->recording.proc.stream_idx = kernel_add_intercept_stream(cm->conf.kernelfd,
+			call->recording->proc.call_idx, stream_id);
+	if (stream->recording.proc.stream_idx == UNINIT_IDX) {
+		ilog(LOG_ERR, "Failed to add stream to kernel recording interface: %s", strerror(errno));
+		return;
+	}
+	ilog(LOG_DEBUG, "kernel stream idx is %u", stream->recording.proc.stream_idx);
+}
+
+static void dump_packet_proc(struct recording *recording, struct packet_stream *stream, str *s) {
 }
