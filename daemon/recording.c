@@ -602,7 +602,7 @@ static void finish_proc(struct call *call) {
 		return;
 	if (recording->proc.call_idx != UNINIT_IDX)
 		kernel_del_call(cm->conf.kernelfd, recording->proc.call_idx);
-	// XXX unlink meta file??
+	unlink(recording->meta_filepath);
 }
 
 static void init_stream_proc(struct packet_stream *stream) {
