@@ -62,7 +62,7 @@ MODULE_LICENSE("GPL");
 			(x).u.u8[15],		\
 			(x).port
 
-#if 1
+#if 0
 #define DBG(fmt, ...) printk(KERN_DEBUG "[PID %i line %i] " fmt, current ? current->pid : -1, \
 		__LINE__, ##__VA_ARGS__)
 #else
@@ -2327,7 +2327,7 @@ static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_i
 	call->hash_bucket = crc32_le(0x52342, info->call_id, strlen(info->call_id));
 	call->hash_bucket = call->hash_bucket & ((1 << HASH_BITS) - 1);
 
-	spin_lock(&table->calls_hash_lock[call->hash_bucket]);
+	spin_lock_irqsave(&table->calls_hash_lock[call->hash_bucket], flags);
 
 	hlist_for_each_entry(hash_entry, &table->calls_hash[call->hash_bucket], calls_hash_entry) {
 		if (!strcmp(hash_entry->info.call_id, info->call_id))
@@ -2335,7 +2335,7 @@ static int table_new_call(struct rtpengine_table *table, struct rtpengine_call_i
 	}
 	goto not_found;
 found:
-	spin_unlock(&table->calls_hash_lock[call->hash_bucket]);
+	spin_unlock_irqrestore(&table->calls_hash_lock[call->hash_bucket], flags);
 	printk(KERN_ERR "Call name collision: %s\n", info->call_id);
 	err = -EEXIST;
 	goto fail2;
@@ -2343,7 +2343,7 @@ found:
 not_found:
 	hlist_add_head(&call->calls_hash_entry, &table->calls_hash[call->hash_bucket]);
 	ref_get(call);
-	spin_unlock(&table->calls_hash_lock[call->hash_bucket]);
+	spin_unlock_irqrestore(&table->calls_hash_lock[call->hash_bucket], flags);
 
 	/* create proc */
 
@@ -2372,9 +2372,9 @@ not_found:
 fail3:
 	write_unlock_irqrestore(&calls.lock, flags);
 fail4:
-	spin_lock(&table->calls_hash_lock[call->hash_bucket]);
+	spin_lock_irqsave(&table->calls_hash_lock[call->hash_bucket], flags);
 	hlist_del(&call->calls_hash_entry);
-	spin_unlock(&table->calls_hash_lock[call->hash_bucket]);
+	spin_unlock_irqrestore(&table->calls_hash_lock[call->hash_bucket], flags);
 	call_put(call);
 fail2:
 	call_put(call);
@@ -2429,7 +2429,11 @@ static void del_call(struct re_call *call, struct rtpengine_table *table) {
 	write_lock_irqsave(&streams.lock, flags);
 	while (!list_empty(&call->streams)) {
 		stream = list_first_entry(&call->streams, struct re_stream, call_entry);
+		ref_get(stream);
+		write_unlock_irqrestore(&streams.lock, flags);
 		del_stream(stream, table); /* removes it from this list */
+		DBG("re-locking streams.lock\n");
+		write_lock_irqsave(&streams.lock, flags);
 	}
 	write_unlock_irqrestore(&streams.lock, flags);
 
@@ -2437,12 +2441,12 @@ static void del_call(struct re_call *call, struct rtpengine_table *table) {
 	clear_proc(&call->root);
 
 	DBG("locking table's call hash\n");
-	spin_lock(&table->calls_hash_lock[call->hash_bucket]);
+	spin_lock_irqsave(&table->calls_hash_lock[call->hash_bucket], flags);
 	if (!hlist_unhashed(&call->calls_hash_entry)) {
 		hlist_del_init(&call->calls_hash_entry);
 		call_put(call);
 	}
-	spin_unlock(&table->calls_hash_lock[call->hash_bucket]);
+	spin_unlock_irqrestore(&table->calls_hash_lock[call->hash_bucket], flags);
 
 	DBG("del_call() done, releasing ref\n");
 	call_put(call); /* might be the last ref */
@@ -2491,7 +2495,7 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 	stream->hash_bucket = crc32_le(0x52342 ^ info->call_idx, info->stream_name, strlen(info->stream_name));
 	stream->hash_bucket = stream->hash_bucket & ((1 << HASH_BITS) - 1);
 
-	spin_lock(&table->streams_hash_lock[stream->hash_bucket]);
+	spin_lock_irqsave(&table->streams_hash_lock[stream->hash_bucket], flags);
 
 	hlist_for_each_entry(hash_entry, &table->streams_hash[stream->hash_bucket], streams_hash_entry) {
 		if (hash_entry->info.call_idx == info->call_idx
@@ -2500,7 +2504,7 @@ static int table_new_stream(struct rtpengine_table *table, struct rtpengine_stre
 	}
 	goto not_found;
 found:
-	spin_unlock(&table->streams_hash_lock[stream->hash_bucket]);
+	spin_unlock_irqrestore(&table->streams_hash_lock[stream->hash_bucket], flags);
 	printk(KERN_ERR "Stream name collision: %s\n", info->stream_name);
 	err = -EEXIST;
 	goto fail3;
@@ -2508,7 +2512,7 @@ found:
 not_found:
 	hlist_add_head(&stream->streams_hash_entry, &table->streams_hash[stream->hash_bucket]);
 	ref_get(stream);
-	spin_unlock(&table->streams_hash_lock[stream->hash_bucket]);
+	spin_unlock_irqrestore(&table->streams_hash_lock[stream->hash_bucket], flags);
 
 	/* add into array */
 
@@ -2546,9 +2550,9 @@ fail5:
 fail4:
 	write_unlock_irqrestore(&streams.lock, flags);
 
-	spin_lock(&table->streams_hash_lock[stream->hash_bucket]);
+	spin_lock_irqsave(&table->streams_hash_lock[stream->hash_bucket], flags);
 	hlist_del(&stream->streams_hash_entry);
-	spin_unlock(&table->streams_hash_lock[stream->hash_bucket]);
+	spin_unlock_irqrestore(&table->streams_hash_lock[stream->hash_bucket], flags);
 	stream_put(stream);
 fail3:
 	stream_put(stream);
@@ -2557,14 +2561,11 @@ fail2:
 	return err;
 }
 
-/* caller is responsible for locking (streams.lock) */
+/* must be called lock-free and with one reference held, which will be released */
 static void del_stream(struct re_stream *stream, struct rtpengine_table *table) {
 	unsigned long flags;
 
 	DBG("del_stream()\n");
-
-	/* the only references left might be the ones in the lists, so get one until we're done */
-	ref_get(stream);
 
 	DBG("locking stream's packet list lock\n");
 	spin_lock_irqsave(&stream->packet_list_lock, flags);
@@ -2587,34 +2588,35 @@ static void del_stream(struct re_stream *stream, struct rtpengine_table *table) 
 	/* sleeping readers will now close files */
 
 	DBG("clearing stream proc file\n");
+	/* this blocks until the files have been closed */
 	clear_proc(&stream->file);
 
 	DBG("clearing stream from streams_hash\n");
-	spin_lock(&table->streams_hash_lock[stream->hash_bucket]);
+	spin_lock_irqsave(&table->streams_hash_lock[stream->hash_bucket], flags);
 	if (!hlist_unhashed(&stream->streams_hash_entry)) {
 		hlist_del_init(&stream->streams_hash_entry);
 		stream_put(stream);
 	}
-	spin_unlock(&table->streams_hash_lock[stream->hash_bucket]);
+	spin_unlock_irqrestore(&table->streams_hash_lock[stream->hash_bucket], flags);
 
+	write_lock_irqsave(&streams.lock, flags);
 	if (!list_empty(&stream->call_entry)) {
 		DBG("clearing stream's call_entry\n");
 		list_del_init(&stream->call_entry);
 		stream_put(stream);
 	}
-
 	if (streams.array[stream->info.stream_idx] == stream) {
 		DBG("clearing stream's stream_idx entry\n");
 		auto_array_clear_index(&streams, stream->info.stream_idx);
 		stream_put(stream);
 	}
+	write_unlock_irqrestore(&streams.lock, flags);
 
 	DBG("del_stream() done, releasing ref\n");
 	stream_put(stream); /* might be the last ref */
 }
 
 static int table_del_stream(struct rtpengine_table *table, const struct rtpengine_stream_info *info) {
-	unsigned long flags;
 	int err;
 	struct re_call *call;
 	struct re_stream *stream;
@@ -2626,10 +2628,7 @@ static int table_del_stream(struct rtpengine_table *table, const struct rtpengin
 	if (!call)
 		return -ENOENT;
 
-	DBG("locking streams.lock\n");
-	write_lock_irqsave(&streams.lock, flags);
-
-	stream = get_stream(call, info->stream_idx);
+	stream = get_stream_lock(call, info->stream_idx);
 	err = -ENOENT;
 	if (!stream)
 		goto out;
@@ -2639,13 +2638,7 @@ static int table_del_stream(struct rtpengine_table *table, const struct rtpengin
 	err = 0;
 
 out:
-	write_unlock_irqrestore(&streams.lock, flags);
-
-	if (stream)
-		stream_put(stream);
-
 	call_put(call);
-
 	return err;
 }
 
