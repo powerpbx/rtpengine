@@ -6,6 +6,7 @@ use Linux::Inotify2;
 use AnyEvent::Loop;
 use AnyEvent;
 use Fcntl;
+use Errno qw(EINTR EIO EAGAIN EWOULDBLOCK :POSIX);
 
 my $i = new Linux::Inotify2 or die;
 $i->blocking(0);
@@ -103,12 +104,26 @@ sub stream_read {
 	while (1) {
 		my $buf;
 		my $ret = sysread($ref->{fh}, $buf, 65535);
-		defined($ret) or return;
-		if ($ret == 0) {
-			print("eof on $ref->{name} for $mf->{'CALL-ID'}\n");
-			delete($mf->{streams}->{$ref->{name}});
-			return;
+		if (!defined($ret)) {
+			if ($!{EAGAIN} || $!{EWOULDBLOCK}) {
+				return;
+			}
+			print("read error on $ref->{name} for $mf->{'CALL-ID'}: $!\n");
+			# fall through
 		}
-		print("$ret bytes read from $ref->{name} for $mf->{'CALL-ID'}\n");
+		elsif ($ret == 0) {
+			print("eof on $ref->{name} for $mf->{'CALL-ID'}\n");
+			# fall through
+		}
+		else {
+			# $ret > 0
+			print("$ret bytes read from $ref->{name} for $mf->{'CALL-ID'}\n");
+			next;
+		}
+
+		# some kind of error
+		delete($ref->{watcher});
+		delete($mf->{streams}->{$ref->{name}});
+		return;
 	}
 }
