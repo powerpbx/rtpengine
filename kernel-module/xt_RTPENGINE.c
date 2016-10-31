@@ -63,7 +63,8 @@ MODULE_LICENSE("GPL");
 			(x).port
 
 #if 1
-#define DBG(x...) printk(KERN_DEBUG x)
+#define DBG(fmt, ...) printk(KERN_DEBUG "[PID %i line %i] " fmt, current ? current->pid : -1, \
+		__LINE__, ##__VA_ARGS__)
 #else
 #define DBG(x...) ((void)0)
 #endif
@@ -812,6 +813,8 @@ static void clear_stream_packets(struct re_stream *stream) {
 	}
 }
 static void stream_put(struct re_stream *stream) {
+	DBG("stream_put()\n");
+
 	if (!stream)
 		return;
 
@@ -826,6 +829,8 @@ static void stream_put(struct re_stream *stream) {
 	kfree(stream);
 }
 static void call_put(struct re_call *call) {
+	DBG("call_put()\n");
+
 	if (!call)
 		return;
 
@@ -2236,13 +2241,20 @@ static struct re_call *get_call_lock(struct rtpengine_table *table, unsigned int
 	struct re_call *ret;
 	unsigned long flags;
 
+	DBG("entering get_call_lock()\n");
+
 	read_lock_irqsave(&calls.lock, flags);
+
+	DBG("calls.lock acquired\n");
 
 	ret = get_call(table, idx);
 	if (ret)
 		ref_get(ret);
+	else
+		DBG("call not found\n");
 
 	read_unlock_irqrestore(&calls.lock, flags);
+	DBG("calls.lock unlocked\n");
 	return ret;
 }
 /* lock must be held */
@@ -2264,13 +2276,20 @@ static struct re_stream *get_stream_lock(struct re_call *call, unsigned int idx)
 	struct re_stream *ret;
 	unsigned long flags;
 
+	DBG("entering get_stream_lock()\n");
+
 	read_lock_irqsave(&streams.lock, flags);
+
+	DBG("streams.lock acquired\n");
 
 	ret = get_stream(call, idx);
 	if (ret)
 		ref_get(ret);
+	else
+		DBG("stream not found\n");
 
 	read_unlock_irqrestore(&streams.lock, flags);
+	DBG("streams.lock unlocked\n");
 	return ret;
 }
 
@@ -2391,6 +2410,8 @@ static void del_call(struct re_call *call, struct rtpengine_table *table) {
 	struct re_stream *stream;
 	unsigned long flags;
 
+	DBG("del_call()\n");
+
 	/* the only references left might be the ones in the lists, so get one until we're done */
 	ref_get(call);
 
@@ -2404,6 +2425,7 @@ static void del_call(struct re_call *call, struct rtpengine_table *table) {
 		call_put(call);
 	}
 
+	DBG("locking streams.lock\n");
 	write_lock_irqsave(&streams.lock, flags);
 	while (!list_empty(&call->streams)) {
 		stream = list_first_entry(&call->streams, struct re_stream, call_entry);
@@ -2411,8 +2433,10 @@ static void del_call(struct re_call *call, struct rtpengine_table *table) {
 	}
 	write_unlock_irqrestore(&streams.lock, flags);
 
+	DBG("clearing call proc files\n");
 	clear_proc(&call->root);
 
+	DBG("locking table's call hash\n");
 	spin_lock(&table->calls_hash_lock[call->hash_bucket]);
 	if (!hlist_unhashed(&call->calls_hash_entry)) {
 		hlist_del_init(&call->calls_hash_entry);
@@ -2420,6 +2444,7 @@ static void del_call(struct re_call *call, struct rtpengine_table *table) {
 	}
 	spin_unlock(&table->calls_hash_lock[call->hash_bucket]);
 
+	DBG("del_call() done, releasing ref\n");
 	call_put(call); /* might be the last ref */
 }
 
@@ -2536,14 +2561,18 @@ fail2:
 static void del_stream(struct re_stream *stream, struct rtpengine_table *table) {
 	unsigned long flags;
 
+	DBG("del_stream()\n");
+
 	/* the only references left might be the ones in the lists, so get one until we're done */
 	ref_get(stream);
 
+	DBG("locking stream's packet list lock\n");
 	spin_lock_irqsave(&stream->packet_list_lock, flags);
 
 	if (stream->eof) {
 		/* already done this */
 		spin_unlock_irqrestore(&stream->packet_list_lock, flags);
+		DBG("stream is EOF\n");
 		stream_put(stream);
 		return;
 	}
@@ -2553,11 +2582,14 @@ static void del_stream(struct re_stream *stream, struct rtpengine_table *table) 
 
 	spin_unlock_irqrestore(&stream->packet_list_lock, flags);
 
+	DBG("stream is finished (EOF), waking up threads\n");
 	wake_up_interruptible(&stream->wq);
 	/* sleeping readers will now close files */
 
+	DBG("clearing stream proc file\n");
 	clear_proc(&stream->file);
 
+	DBG("clearing stream from streams_hash\n");
 	spin_lock(&table->streams_hash_lock[stream->hash_bucket]);
 	if (!hlist_unhashed(&stream->streams_hash_entry)) {
 		hlist_del_init(&stream->streams_hash_entry);
@@ -2566,15 +2598,18 @@ static void del_stream(struct re_stream *stream, struct rtpengine_table *table) 
 	spin_unlock(&table->streams_hash_lock[stream->hash_bucket]);
 
 	if (!list_empty(&stream->call_entry)) {
+		DBG("clearing stream's call_entry\n");
 		list_del_init(&stream->call_entry);
 		stream_put(stream);
 	}
 
 	if (streams.array[stream->info.stream_idx] == stream) {
+		DBG("clearing stream's stream_idx entry\n");
 		auto_array_clear_index(&streams, stream->info.stream_idx);
 		stream_put(stream);
 	}
 
+	DBG("del_stream() done, releasing ref\n");
 	stream_put(stream); /* might be the last ref */
 }
 
@@ -2584,11 +2619,14 @@ static int table_del_stream(struct rtpengine_table *table, const struct rtpengin
 	struct re_call *call;
 	struct re_stream *stream;
 
+	DBG("table_del_stream()\n");
+
 	call = get_call_lock(table, info->call_idx);
 	err = -ENOENT;
 	if (!call)
 		return -ENOENT;
 
+	DBG("locking streams.lock\n");
 	write_lock_irqsave(&streams.lock, flags);
 
 	stream = get_stream(call, info->stream_idx);
@@ -2622,10 +2660,13 @@ static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t
 	ssize_t ret;
 	const char *to_copy;
 
+	DBG("entering proc_stream_read()\n");
+
 	stream = get_stream_lock(NULL, stream_idx);
 	if (!stream)
 		return -EINVAL;
 
+	DBG("locking stream's packet list lock\n");
 	spin_lock_irqsave(&stream->packet_list_lock, flags);
 
 	while (list_empty(&stream->packet_list) && !stream->eof) {
@@ -2667,6 +2708,7 @@ static ssize_t proc_stream_read(struct file *f, char __user *b, size_t l, loff_t
 		DBG("packet is from kernel, %i bytes\n", (int) ret);
 	}
 	else {
+		printk(KERN_WARNING "BUG in packet stream list buffer\n");
 		ret = -ENXIO;
 		goto err;
 	}
@@ -2689,15 +2731,20 @@ static unsigned int proc_stream_poll(struct file *f, struct poll_table_struct *p
 	unsigned long flags;
 	unsigned int ret = 0;
 
+	DBG("entering proc_stream_poll()\n");
+
 	stream = get_stream_lock(NULL, stream_idx);
 	if (!stream)
 		return POLLERR;
 
+	DBG("locking stream's packet list lock\n");
 	spin_lock_irqsave(&stream->packet_list_lock, flags);
 
 	poll_wait(f, &stream->wq, p);
 	if (!list_empty(&stream->packet_list) || stream->eof)
 		ret |= POLLIN | POLLRDNORM;
+
+	DBG("returning from proc_stream_poll()\n");
 
 	spin_unlock_irqrestore(&stream->packet_list_lock, flags);
 
@@ -2716,12 +2763,15 @@ static void add_stream_packet(struct re_stream *stream, struct re_stream_packet 
 
 	/* append */
 
+	DBG("entering add_stream_packet()\n");
+	DBG("locking stream's packet list lock\n");
 	spin_lock_irqsave(&stream->packet_list_lock, flags);
 
 	err = 0;
 	if (stream->eof)
 		goto err; /* we accept, but ignore/discard */
 
+	DBG("adding packet to queue\n");
 	list_add_tail(&packet->list_entry, &stream->packet_list);
 	stream->list_count++;
 
@@ -2738,6 +2788,8 @@ static void add_stream_packet(struct re_stream *stream, struct re_stream_packet 
 
 	spin_unlock_irqrestore(&stream->packet_list_lock, flags);
 
+	DBG("stream's packet list lock is unlocked, now awakening processes\n");
+
 	wake_up_interruptible(&stream->wq);
 
 	while (!list_empty(&delete_list)) {
@@ -2749,6 +2801,7 @@ static void add_stream_packet(struct re_stream *stream, struct re_stream_packet 
 	return;
 
 err:
+	DBG("error adding packet to stream\n");
 	spin_unlock_irqrestore(&stream->packet_list_lock, flags);
 	free_packet(packet);
 	return;
