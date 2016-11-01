@@ -2228,8 +2228,12 @@ static int auto_array_find_free_index(struct re_auto_array *a) {
 	void *ptr;
 	unsigned int u, idx;
 
-	if (!list_empty(&a->free_list))
+	DBG("auto_array_find_free_index()\n");
+
+	if (!list_empty(&a->free_list)) {
+		DBG("returning from free list\n");
 		return pop_free_list_entry(a);
+	}
 
 	for (idx = 0; idx < a->array_len / (sizeof(unsigned long) * 8); idx++) {
 		if (~a->used_bitfield[idx])
@@ -2237,6 +2241,7 @@ static int auto_array_find_free_index(struct re_auto_array *a) {
 	}
 
 	/* nothing free found - extend array */
+	DBG("no free slot found, extending array\n");
 
 	u = a->array_len * 2;
 	if (unlikely(!u))
@@ -2244,23 +2249,26 @@ static int auto_array_find_free_index(struct re_auto_array *a) {
 
 	DBG("extending array from %u to %u\n", a->array_len, u);
 
-	ptr = krealloc(a->array, sizeof(*a->array) * u, GFP_KERNEL);
+	ptr = krealloc(a->array, sizeof(*a->array) * u, GFP_ATOMIC);
 	if (!ptr)
 		return -ENOMEM;
 	a->array = ptr;
+	DBG("zeroing main array starting at idx %u for %lu bytes\n",
+			a->array_len, (u - a->array_len) * sizeof(*a->array));
 	memset(&a->array[a->array_len], 0,
 			(u - a->array_len) * sizeof(*a->array));
 
-	ptr = krealloc(a->used_bitfield, sizeof(*a->used_bitfield) * u
-			/ (sizeof(unsigned long) * 8), GFP_KERNEL);
+	ptr = krealloc(a->used_bitfield, u / 8, GFP_ATOMIC);
 	if (!ptr)
 		return -ENOMEM;
 	a->used_bitfield = ptr;
+	DBG("zeroing bitfield array starting at idx %lu for %u bytes\n",
+			a->array_len / (sizeof(unsigned long) * 8),
+			(u - a->array_len) / 8);
 	memset(&a->used_bitfield[a->array_len / (sizeof(unsigned long) * 8)], 0,
-			(u - a->array_len)
-			* (sizeof(*a->used_bitfield) / (sizeof(unsigned long) * 8)));
+			(u - a->array_len) / 8);
 
-	idx = a->array_len;
+	idx = a->array_len / (sizeof(unsigned long) * 8);
 	a->array_len = u;
 
 found:

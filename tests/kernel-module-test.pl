@@ -188,7 +188,7 @@ my $msg;
 
 
 
-{
+if (0) {
 	my (@calls, @streams);
 	my $runs = 100;
 	while ($runs >= 0 || @calls || @streams) {
@@ -327,73 +327,88 @@ sleep($sleep);
 
 
 
-print("creating identical call\n");
-
-$msg = rtpengine_message_call('add_call', 0, 'test call');
-$ret = sysread(F, $msg, length($msg)) // '-';
-#print("reply: " . unpack("H*", $msg) . "\n");
-print("ret = $ret, code = $!\n");
-
-my (undef, undef, $idx2) = unpack("VV V a256", $msg);
-print("index is $idx2\n");
-
-sleep($sleep);
-
-
-
-print("creating other call\n");
-
-$msg = rtpengine_message_call('add_call', 0, 'another test call');
-$ret = sysread(F, $msg, length($msg)) // '-';
-#print("reply: " . unpack("H*", $msg) . "\n");
-print("ret = $ret, code = $!\n");
-
-my (undef, undef, $idx3) = unpack("VV V a256", $msg);
-print("index is $idx3\n");
-
-sleep($sleep);
+# print("creating identical call\n");
+# 
+# $msg = rtpengine_message_call('add_call', 0, 'test call');
+# $ret = sysread(F, $msg, length($msg)) // '-';
+# #print("reply: " . unpack("H*", $msg) . "\n");
+# print("ret = $ret, code = $!\n");
+# 
+# my (undef, undef, $idx2) = unpack("VV V a256", $msg);
+# print("index is $idx2\n");
+# 
+# sleep($sleep);
 
 
 
-print("creating a stream\n");
-
-$msg = rtpengine_message_stream('add_stream', $idx1, 0, 'test stream');
-$ret = sysread(F, $msg, length($msg)) // '-';
-#print("reply: " . unpack("H*", $msg) . "\n");
-print("ret = $ret, code = $!\n");
-
-my (undef, undef, undef, $sidx1) = unpack("VV VV a256", $msg);
-print("index is $sidx1\n");
-
-sleep($sleep);
-
-
-
-print("creating identical stream\n");
-
-$msg = rtpengine_message_stream('add_stream', $idx1, 0, 'test stream');
-$ret = sysread(F, $msg, length($msg)) // '-';
-#print("reply: " . unpack("H*", $msg) . "\n");
-print("ret = $ret, code = $!\n");
-
-my (undef, undef, undef, $sidx2) = unpack("VV VV a256", $msg);
-print("index is $sidx2\n");
-
-sleep($sleep);
+# print("creating other call\n");
+# 
+# $msg = rtpengine_message_call('add_call', 0, 'another test call');
+# $ret = sysread(F, $msg, length($msg)) // '-';
+# #print("reply: " . unpack("H*", $msg) . "\n");
+# print("ret = $ret, code = $!\n");
+# 
+# my (undef, undef, $idx3) = unpack("VV V a256", $msg);
+# print("index is $idx3\n");
+# 
+# sleep($sleep);
 
 
 
-print("creating different stream\n");
+for my $exp (0 .. 1000) {
+	print("creating a stream\n");
 
-$msg = rtpengine_message_stream('add_stream', $idx3, 0, 'test stream');
-$ret = sysread(F, $msg, length($msg)) // '-';
-#print("reply: " . unpack("H*", $msg) . "\n");
-print("ret = $ret, code = $!\n");
+	$msg = rtpengine_message_stream('add_stream', $idx1, 0, 'test stream ' . rand());
+	$ret = sysread(F, $msg, length($msg)) // '-';
+	#print("reply: " . unpack("H*", $msg) . "\n");
+	print("ret = $ret, code = $!\n");
 
-my (undef, undef, undef, $sidx3) = unpack("VV VV a256", $msg);
-print("index is $sidx3\n");
+	my (undef, undef, undef, $sidx1) = unpack("VV VV a256", $msg);
+	print("index is $sidx1\n");
+	$sidx1 == $exp or die;
+}
 
-sleep($sleep);
+
+
+# print("creating a stream\n");
+# 
+# $msg = rtpengine_message_stream('add_stream', $idx1, 0, 'test stream');
+# $ret = sysread(F, $msg, length($msg)) // '-';
+# #print("reply: " . unpack("H*", $msg) . "\n");
+# print("ret = $ret, code = $!\n");
+# 
+# my (undef, undef, undef, $sidx1) = unpack("VV VV a256", $msg);
+# print("index is $sidx1\n");
+# 
+# sleep($sleep);
+
+
+
+# print("creating identical stream\n");
+# 
+# $msg = rtpengine_message_stream('add_stream', $idx1, 0, 'test stream');
+# $ret = sysread(F, $msg, length($msg)) // '-';
+# #print("reply: " . unpack("H*", $msg) . "\n");
+# print("ret = $ret, code = $!\n");
+# 
+# my (undef, undef, undef, $sidx2) = unpack("VV VV a256", $msg);
+# print("index is $sidx2\n");
+# 
+# sleep($sleep);
+
+
+
+# print("creating different stream\n");
+# 
+# $msg = rtpengine_message_stream('add_stream', $idx3, 0, 'test stream');
+# $ret = sysread(F, $msg, length($msg)) // '-';
+# #print("reply: " . unpack("H*", $msg) . "\n");
+# print("ret = $ret, code = $!\n");
+# 
+# my (undef, undef, undef, $sidx3) = unpack("VV VV a256", $msg);
+# print("index is $sidx3\n");
+
+# sleep($sleep);
 
 
 
