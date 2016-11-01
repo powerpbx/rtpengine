@@ -69,6 +69,70 @@ MODULE_LICENSE("GPL");
 #define DBG(x...) ((void)0)
 #endif
 
+#if 1
+#define _s_lock(l, f) do {								\
+		printk(KERN_DEBUG "[PID %i %s:%i] acquiring lock %s\n",			\
+			current ? current->pid : -1,					\
+				__FUNCTION__, __LINE__, #l);				\
+		spin_lock_irqsave(l, f);						\
+		printk(KERN_DEBUG "[PID %i %s:%i] has acquired lock %s\n",		\
+			current ? current->pid : -1,					\
+				__FUNCTION__, __LINE__, #l);				\
+	} while (0)
+#define _s_unlock(l, f) do {								\
+		printk(KERN_DEBUG "[PID %i %s:%i] is unlocking %s\n",			\
+			current ? current->pid : -1,					\
+				__FUNCTION__, __LINE__, #l);				\
+		spin_unlock_irqrestore(l, f);						\
+		printk(KERN_DEBUG "[PID %i %s:%i] has released lock %s\n",		\
+			current ? current->pid : -1,					\
+				__FUNCTION__, __LINE__, #l);				\
+	} while (0)
+#define _r_lock(l, f) do {								\
+		printk(KERN_DEBUG "[PID %i %s:%i] acquiring read lock %s\n",		\
+			current ? current->pid : -1,					\
+				__FUNCTION__, __LINE__, #l);				\
+		read_lock_irqsave(l, f);						\
+		printk(KERN_DEBUG "[PID %i %s:%i] has acquired read lock %s\n",		\
+			current ? current->pid : -1,					\
+				__FUNCTION__, __LINE__, #l);				\
+	} while (0)
+#define _r_unlock(l, f) do {								\
+		printk(KERN_DEBUG "[PID %i %s:%i] is read unlocking %s\n",		\
+			current ? current->pid : -1,					\
+				__FUNCTION__, __LINE__, #l);				\
+		read_unlock_irqrestore(l, f);						\
+		printk(KERN_DEBUG "[PID %i %s:%i] has released read lock %s\n",		\
+			current ? current->pid : -1,					\
+				__FUNCTION__, __LINE__, #l);				\
+	} while (0)
+#define _w_lock(l, f) do {								\
+		printk(KERN_DEBUG "[PID %i %s:%i] acquiring write lock %s\n",		\
+			current ? current->pid : -1,					\
+				__FUNCTION__, __LINE__, #l);				\
+		write_lock_irqsave(l, f);						\
+		printk(KERN_DEBUG "[PID %i %s:%i] has acquired write lock %s\n",	\
+			current ? current->pid : -1,					\
+				__FUNCTION__, __LINE__, #l);				\
+	} while (0)
+#define _w_unlock(l, f) do {								\
+		printk(KERN_DEBUG "[PID %i %s:%i] is write unlocking %s\n",		\
+			current ? current->pid : -1, 					\
+				__FUNCTION__, __LINE__, #l);				\
+		write_unlock_irqrestore(l, f);						\
+		printk(KERN_DEBUG "[PID %i %s:%i] has released write lock %s\n",	\
+			current ? current->pid : -1, 					\
+				__FUNCTION__, __LINE__, #l);				\
+	} while (0)
+#else
+#define _s_lock(l, f) spin_lock_irqsave(l, f)
+#define _s_unlock(l, f) spin_unlock_irqrestore(l, f)
+#define _r_lock(l, f) read_lock_irqsave(l, f)
+#define _r_unlock(l, f) read_unlock_irqrestore(l, f)
+#define _w_lock(l, f) write_lock_irqsave(l, f)
+#define _w_unlock(l, f) write_unlock_irqrestore(l, f)
+#endif
+
 
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
