@@ -3174,8 +3174,8 @@ drop:
 
 
 static int send_proxy_packet(struct sk_buff *skb, struct re_address *src, struct re_address *dst,
-		unsigned char tos, const struct xt_action_param *par) {
-
+		unsigned char tos, const struct xt_action_param *par)
+{
 	if (src->family != dst->family)
 		goto drop;
 
@@ -3553,9 +3553,52 @@ static inline int rtp_payload_type(const struct rtp_header *hdr, const struct rt
 }
 #endif
 
+static struct sk_buff *intercept_skb_copy(struct sk_buff *oskb, const struct re_address *src) {
+	struct sk_buff *ret;
+	struct udphdr *uh;
+	struct iphdr *ih;
+	struct ipv6hdr *ih6;
+
+	ret = skb_copy_expand(oskb, MAX_HEADER, MAX_SKB_TAIL_ROOM, GFP_ATOMIC);
+	if (!ret)
+		return NULL;
+
+	// restore original header. it's still present in the copied skb, so we just need
+	// to push back our head room. the payload lengths might be wrong and must be fixed.
+	// checksums might also be wrong, but can be ignored.
+
+	// restore transport header
+	skb_push(ret, ret->data - skb_transport_header(ret));
+	uh = (void *) skb_transport_header(ret);
+	uh->len = htons(ret->len);
+
+	// restore network header
+	skb_push(ret, ret->data - skb_network_header(ret));
+
+	// restore network length field
+	switch (src->family) {
+		case AF_INET:
+			ih = (void *) skb_network_header(ret);
+			ih->tot_len = htons(ret->len);
+			break;
+		case AF_INET6:
+			ih6 = (void *) skb_network_header(ret);
+			ih6->payload_len = htons(ret->len - sizeof(*ih6));
+			break;
+		default:
+			kfree_skb(ret);
+			return NULL;
+	}
+
+	return ret;
+}
+
+
+
+
+
 static unsigned int rtpengine46(struct sk_buff *skb, struct rtpengine_table *t, struct re_address *src,
-		struct re_address *dst, u_int8_t in_tos, const struct xt_action_param *par,
-		struct sk_buff *oskb)
+		struct re_address *dst, u_int8_t in_tos, const struct xt_action_param *par)
 {
 	struct udphdr *uh;
 	struct rtpengine_target *g;
@@ -3670,7 +3713,7 @@ src_check_ok:
 not_rtp:
 	if (g->target.mirror_addr.family) {
 		DBG("sending mirror packet to dst "MIPF"\n", MIPP(g->target.mirror_addr));
-		skb2 = skb_copy(skb, GFP_ATOMIC);
+		skb2 = skb_copy_expand(skb, MAX_HEADER, MAX_SKB_TAIL_ROOM, GFP_ATOMIC);
 		err = send_proxy_packet(skb2, &g->target.src_addr, &g->target.mirror_addr, g->target.tos,
 				par);
 		if (err)
@@ -3685,7 +3728,7 @@ not_rtp:
 		packet = kzalloc(sizeof(*packet), GFP_ATOMIC);
 		if (!packet)
 			goto intercept_done;
-		packet->skbuf = skb_copy(oskb, GFP_ATOMIC);
+		packet->skbuf = intercept_skb_copy(skb, src);
 		if (!packet->skbuf)
 			goto no_intercept_free;
 		add_stream_packet(stream, packet);
@@ -3801,12 +3844,13 @@ static unsigned int rtpengine4(struct sk_buff *oskb, const struct xt_action_para
 		goto skip2;
 
 	memset(&src, 0, sizeof(src));
+	memset(&dst, 0, sizeof(dst));
 	src.family = AF_INET;
 	src.u.ipv4 = ih->saddr;
 	dst.family = AF_INET;
 	dst.u.ipv4 = ih->daddr;
 
-	return rtpengine46(skb, t, &src, &dst, (u_int8_t)ih->tos, par, oskb);
+	return rtpengine46(skb, t, &src, &dst, (u_int8_t)ih->tos, par);
 
 skip2:
 	kfree_skb(skb);
@@ -3846,12 +3890,13 @@ static unsigned int rtpengine6(struct sk_buff *oskb, const struct xt_action_para
 		goto skip2;
 
 	memset(&src, 0, sizeof(src));
+	memset(&dst, 0, sizeof(dst));
 	src.family = AF_INET6;
 	memcpy(&src.u.ipv6, &ih->saddr, sizeof(src.u.ipv6));
 	dst.family = AF_INET6;
 	memcpy(&dst.u.ipv6, &ih->daddr, sizeof(dst.u.ipv6));
 
-	return rtpengine46(skb, t, &src, &dst, ipv6_get_dsfield(ih), par, oskb);
+	return rtpengine46(skb, t, &src, &dst, ipv6_get_dsfield(ih), par);
 
 skip2:
 	kfree_skb(skb);

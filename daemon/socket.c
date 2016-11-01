@@ -411,7 +411,7 @@ static unsigned int __ip6_packet_header(unsigned char *out, const endpoint_t *sr
 	ZERO(*iph);
 	iph->ip6_vfc = 0x60; // version 6;
 	//iph->ip6_flow = htonl(0x60000000); // version 6
-	iph->ip6_plen = htons(sizeof(*iph) + udp_len + payload_len);
+	iph->ip6_plen = htons(udp_len + payload_len);
 	iph->ip6_nxt = 17; // UDP
 	iph->ip6_hlim = 64;
 	iph->ip6_src = src->address.u.ipv6;
