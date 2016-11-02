@@ -80,7 +80,11 @@ struct recording_method {
 
 extern const struct recording_method *selected_recording_method;
 
-#define _rm(call, args...) selected_recording_method->call(args)
+#define _rm_ret(call, args...) selected_recording_method->call(args)
+#define _rm(call, args...) do { \
+		if (selected_recording_method->call) \
+			selected_recording_method->call(args); \
+	} while (0)
 #define _rm_chk(call, recording, ...) do { \
 		if (recording) \
 			_rm(call, recording, ##__VA_ARGS__); \

@@ -24,7 +24,6 @@
 static int check_main_spool_dir(const char *spoolpath);
 static char *recording_setup_file(struct recording *recording);
 static char *meta_setup_file(struct recording *recording);
-static void dummy();
 
 // pcap methods
 static int pcap_create_spool_dir(const char *dirpath);
@@ -55,15 +54,10 @@ static const struct recording_method methods[] = {
 		.kernel_support = 0,
 		.create_spool_dir = pcap_create_spool_dir,
 		.init_struct = pcap_init,
-		.sdp_before = dummy,
 		.sdp_after = sdp_after_pcap,
-		.meta_chunk = dummy,
 		.dump_packet = dump_packet_pcap,
 		.finish = finish_pcap,
 		.response = response_pcap,
-		.init_stream_struct = dummy,
-		.setup_stream = dummy,
-		.stream_kernel_info = dummy,
 	},
 	{
 		.name = "proc",
@@ -75,7 +69,6 @@ static const struct recording_method methods[] = {
 		.meta_chunk = meta_chunk_proc,
 		.dump_packet = dump_packet_proc,
 		.finish = finish_proc,
-		.response = dummy,
 		.init_stream_struct = init_stream_proc,
 		.setup_stream = setup_stream_proc,
 		.stream_kernel_info = kernel_info_proc,
@@ -89,11 +82,6 @@ static char *spooldir = NULL;
 const struct recording_method *selected_recording_method;
 
 
-
-
-static void dummy() {
-	;
-}
 
 
 /**
@@ -125,7 +113,7 @@ found:
 	if (spooldir[path_len-1] == '/') {
 		spooldir[path_len-1] = '\0';
 	}
-	if (!_rm(create_spool_dir, spooldir)) {
+	if (!_rm_ret(create_spool_dir, spooldir)) {
 		// XXX replace fprintf with ilog
 		fprintf(stderr, "Error while setting up spool directory \"%s\".\n", spooldir);
 		fprintf(stderr, "Please run `mkdir %s` and start rtpengine again.\n", spooldir);
