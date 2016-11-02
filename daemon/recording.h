@@ -14,6 +14,7 @@
 #include <pcap.h>
 #include "str.h"
 #include "aux.h"
+#include "bencode.h"
 
 
 struct packet_stream;
@@ -45,7 +46,7 @@ struct recording {
 		struct recording_proc proc;
 	};
 
-	str		*metadata; // from controlling daemon
+	str		metadata; // from controlling daemon
 	char		*escaped_callid; // call-id with dangerous characters escaped
 	char		*meta_prefix; // escaped call-id plus random suffix
 	char		*meta_filepath; // full file path
@@ -66,9 +67,11 @@ struct recording_method {
 
 	void (*sdp_before)(struct recording *, const str *, enum call_opmode);
 	void (*sdp_after)(struct recording *, struct iovec *, int, unsigned int, enum call_opmode);
+	void (*meta_chunk)(struct recording *, const char *, const str *);
 
 	void (*dump_packet)(struct recording *, struct packet_stream *sink, const str *s);
 	void (*finish)(struct call *);
+	void (*response)(struct recording *, bencode_item_t *);
 
 	void (*init_stream_struct)(struct packet_stream *);
 	void (*setup_stream)(struct packet_stream *);
@@ -142,8 +145,8 @@ int detect_setup_recording(struct call *call, str recordcall);
  */
 //ssize_t meta_write_sdp(struct recording *, struct iovec *sdp_iov, int iovcnt,
 //		       enum call_opmode opmode);
-#define meta_write_sdp_before(args...) _rm_chk(sdp_before, args)
-#define meta_write_sdp_after(args...) _rm_chk(sdp_after, args)
+#define meta_write_sdp_before(args...) _rm(sdp_before, args)
+#define meta_write_sdp_after(args...) _rm(sdp_after, args)
 
 /**
  * Writes metadata to metafile, closes file, and moves it to finished location.
@@ -173,5 +176,7 @@ void recording_finish(struct call *);
 #define recording_setup_stream(args...) _rm(setup_stream, args)
 #define recording_init_stream(args...) _rm(init_stream_struct, args)
 #define recording_stream_kernel_info(args...) _rm(stream_kernel_info, args)
+#define recording_meta_chunk(args...) _rm(meta_chunk, args)
+#define recording_response(args...) _rm(response, args)
 
 #endif

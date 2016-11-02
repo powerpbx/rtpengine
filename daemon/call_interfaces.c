@@ -748,21 +748,14 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 		meta_write_sdp_before(recording, &sdp, opmode);
 		meta_write_sdp_after(recording, sdp_iov, chopper->iov_num, chopper->str_len,
 			       opmode);
-	}
-	bencode_dictionary_get_str(input, "metadata", &metadata);
-	if (metadata.len > 0 && call->recording != NULL) {
-		if (call->recording->metadata != NULL) {
-			free(call->recording->metadata);
-			call->recording->metadata = NULL;
-		}
-		call->recording->metadata = str_dup(&metadata);
-	}
 
-	// XXX clean this up
-	bencode_item_t *recordings = bencode_dictionary_add_list(output, "recordings");
-	if (call->recording != NULL && call->recording->pcap.recording_path != NULL) {
-		char *recording_path = call->recording->pcap.recording_path;
-		bencode_list_add_string(recordings, recording_path);
+		bencode_dictionary_get_str(input, "metadata", &metadata);
+		if (metadata.len) {
+			call_str_cpy(call, &recording->metadata, &metadata);
+			recording_meta_chunk(recording, "METADATA", &metadata);
+		}
+
+		recording_response(recording, output);
 	}
 
 	rwlock_unlock_w(&call->master_lock);

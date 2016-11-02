@@ -17,6 +17,7 @@
 
 #include "call.h"
 #include "kernel.h"
+#include "bencode.h"
 
 
 
@@ -32,12 +33,14 @@ static void sdp_after_pcap(struct recording *, struct iovec *sdp_iov, int iovcnt
 		       unsigned int str_len, enum call_opmode opmode);
 static void dump_packet_pcap(struct recording *recording, struct packet_stream *sink, const str *s);
 static void finish_pcap(struct call *);
+static void response_pcap(struct recording *, bencode_item_t *);
 
 // proc methods
 static void proc_init(struct call *);
 static void sdp_before_proc(struct recording *, const str *, enum call_opmode);
 static void sdp_after_proc(struct recording *, struct iovec *sdp_iov, int iovcnt,
 		       unsigned int str_len, enum call_opmode opmode);
+static void meta_chunk_proc(struct recording *, const char *, const str *);
 static void finish_proc(struct call *);
 static void dump_packet_proc(struct recording *recording, struct packet_stream *sink, const str *s);
 static void init_stream_proc(struct packet_stream *);
@@ -54,8 +57,10 @@ static const struct recording_method methods[] = {
 		.init_struct = pcap_init,
 		.sdp_before = dummy,
 		.sdp_after = sdp_after_pcap,
+		.meta_chunk = dummy,
 		.dump_packet = dump_packet_pcap,
 		.finish = finish_pcap,
+		.response = response_pcap,
 		.init_stream_struct = dummy,
 		.setup_stream = dummy,
 		.stream_kernel_info = dummy,
@@ -67,8 +72,10 @@ static const struct recording_method methods[] = {
 		.init_struct = proc_init,
 		.sdp_before = sdp_before_proc,
 		.sdp_after = sdp_after_proc,
+		.meta_chunk = meta_chunk_proc,
 		.dump_packet = dump_packet_proc,
 		.finish = finish_proc,
+		.response = dummy,
 		.init_stream_struct = init_stream_proc,
 		.setup_stream = setup_stream_proc,
 		.stream_kernel_info = kernel_info_proc,
@@ -328,8 +335,8 @@ static int pcap_meta_finish_file(struct call *call) {
 		fprintf(recording->pcap.meta_fp, "call end time: %s\n", timebuffer);
 
 		// Print metadata
-		if (recording->metadata)
-			fprintf(recording->pcap.meta_fp, "\n\n"STR_FORMAT"\n", STR_FMT(recording->metadata));
+		if (recording->metadata.len)
+			fprintf(recording->pcap.meta_fp, "\n\n"STR_FORMAT"\n", STR_FMT(&recording->metadata));
 		fclose(recording->pcap.meta_fp);
 
 		// Get the filename (in between its directory and the file extension)
@@ -461,6 +468,20 @@ static void finish_pcap(struct call *call) {
 	pcap_meta_finish_file(call);
 }
 
+static void response_pcap(struct recording *recording, bencode_item_t *output) {
+	if (!recording->pcap.recording_path)
+		return;
+
+	bencode_item_t *recordings = bencode_dictionary_add_list(output, "recordings");
+	bencode_list_add_string(recordings, recording->pcap.recording_path);
+}
+
+
+
+
+
+
+
 void recording_finish(struct call *call) {
 	if (!call || !call->recording)
 		return;
@@ -471,7 +492,6 @@ void recording_finish(struct call *call) {
 
 	free(recording->meta_prefix);
 	free(recording->escaped_callid);
-	free(recording->metadata);
 	free(recording->meta_filepath);
 
 	g_slice_free1(sizeof(*(recording)), recording);
@@ -671,4 +691,8 @@ static void kernel_info_proc(struct packet_stream *stream, struct rtpengine_targ
 	ilog(LOG_DEBUG, "enabling kernel intercept with stream idx %u", stream->recording.proc.stream_idx);
 	reti->do_intercept = 1;
 	reti->intercept_stream_idx = stream->recording.proc.stream_idx;
+}
+
+static void meta_chunk_proc(struct recording *recording, const char *label, const str *data) {
+	append_meta_chunk_str(recording, data, "%s", label);
 }
