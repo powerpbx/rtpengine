@@ -63,7 +63,10 @@ struct recording_method {
 
 	int (*create_spool_dir)(const char *);
 	void (*init_struct)(struct call *);
-	int (*write_meta_sdp)(struct recording *, struct iovec *, int, unsigned int, enum call_opmode);
+
+	void (*sdp_before)(struct recording *, const str *, enum call_opmode);
+	void (*sdp_after)(struct recording *, struct iovec *, int, unsigned int, enum call_opmode);
+
 	void (*dump_packet)(struct recording *, struct packet_stream *sink, const str *s);
 	void (*finish)(struct call *);
 
@@ -75,13 +78,9 @@ struct recording_method {
 extern const struct recording_method *selected_recording_method;
 
 #define _rm(call, args...) selected_recording_method->call(args)
-#define _rm_chk1(call, recording) do { \
+#define _rm_chk(call, recording, ...) do { \
 		if (recording) \
-			_rm(call, recording); \
-	} while (0)
-#define _rm_chk(call, recording, args...) do { \
-		if (recording) \
-			_rm(call, recording, args); \
+			_rm(call, recording, ##__VA_ARGS__); \
 	} while (0)
 
 
@@ -143,7 +142,8 @@ int detect_setup_recording(struct call *call, str recordcall);
  */
 //ssize_t meta_write_sdp(struct recording *, struct iovec *sdp_iov, int iovcnt,
 //		       enum call_opmode opmode);
-#define meta_write_sdp(args...) _rm_chk(write_meta_sdp, args)
+#define meta_write_sdp_before(args...) _rm_chk(sdp_before, args)
+#define meta_write_sdp_after(args...) _rm_chk(sdp_after, args)
 
 /**
  * Writes metadata to metafile, closes file, and moves it to finished location.

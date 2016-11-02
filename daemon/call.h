@@ -544,6 +544,9 @@ void add_total_calls_duration_in_interval(struct callmaster *cm, struct timeval 
 void __payload_type_free(void *p);
 void __rtp_stats_update(GHashTable *dst, GHashTable *src);
 
+const char *get_tag_type_text(enum tag_type t);
+const char *get_opmode_text(enum call_opmode);
+
 
 
 #include "str.h"
@@ -608,6 +611,5 @@ INLINE struct packet_stream *packet_stream_sink(struct packet_stream *ps) {
 	return ret;
 }
 
-const char * get_tag_type_text(enum tag_type t);
 
 #endif

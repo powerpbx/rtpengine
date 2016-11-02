@@ -123,12 +123,19 @@ static const char * const __tag_type_texts[] = {
 	[FROM_TAG] = "FROM_TAG",
 	[TO_TAG] = "TO_TAG",
 };
+static const char *const __opmode_texts[] = {
+	[OP_OFFER] = "offer",
+	[OP_ANSWER] = "answer",
+};
 
 static const char * get_term_reason_text(enum termination_reason t) {
 	return get_enum_array_text(__term_reason_texts, t, "UNKNOWN");
 }
 const char * get_tag_type_text(enum tag_type t) {
 	return get_enum_array_text(__tag_type_texts, t, "UNKNOWN");
+}
+const char *get_opmode_text(enum call_opmode m) {
+	return get_enum_array_text(__opmode_texts, m, "other");
 }
 
 

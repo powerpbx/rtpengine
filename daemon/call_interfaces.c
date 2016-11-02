@@ -745,8 +745,8 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 
 	struct recording *recording = call->recording;
 	if (recording != NULL) {
-		// XXX add before/after SDP
-		meta_write_sdp(recording, sdp_iov, chopper->iov_num, chopper->str_len,
+		meta_write_sdp_before(recording, &sdp, opmode);
+		meta_write_sdp_after(recording, sdp_iov, chopper->iov_num, chopper->str_len,
 			       opmode);
 	}
 	bencode_dictionary_get_str(input, "metadata", &metadata);
