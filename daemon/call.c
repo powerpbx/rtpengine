@@ -511,7 +511,7 @@ static void callmaster_timer(void *ptr) {
 	atomic64_set(&m->stats.packets, atomic64_get_na(&tmpstats.packets));
 	atomic64_set(&m->stats.errors, atomic64_get_na(&tmpstats.errors));
 
-	i = (m->conf.kernelid >= 0) ? kernel_list(m->conf.kernelid) : NULL;
+	i = kernel_list();
 	while (i) {
 		ke = i->data;
 

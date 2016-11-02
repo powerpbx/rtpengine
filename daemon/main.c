@@ -556,24 +556,17 @@ static void create_everything(struct main_context *ctx) {
 	struct control_udp *cu;
 	struct control_ng *cn;
 	struct cli *cl;
-	int kfd = -1;
 	struct timeval tmp_tv;
 	struct timeval redis_start, redis_stop;
 	double redis_diff = 0;
 
 	if (table < 0)
 		goto no_kernel;
-	if (kernel_create_table(table)) {
-		ilog(LOG_CRIT, "FAILED TO CREATE KERNEL TABLE %i, KERNEL FORWARDING DISABLED", table);
-		if (no_fallback)
+	if (kernel_setup_table(table)) {
+		if (no_fallback) {
+			ilog(LOG_CRIT, "Userspace fallback disallowed - exiting");
 			exit(-1);
-		goto no_kernel;
-	}
-	kfd = kernel_open_table(table);
-	if (kfd == -1) {
-		ilog(LOG_CRIT, "FAILED TO OPEN KERNEL TABLE %i, KERNEL FORWARDING DISABLED", table);
-		if (no_fallback)
-			exit(-1);
+		}
 		goto no_kernel;
 	}
 
@@ -590,8 +583,6 @@ no_kernel:
 
 	ZERO(mc);
         rwlock_init(&mc.config_lock);
-	mc.kernelfd = kfd;
-	mc.kernelid = table;
 	if (max_sessions < -1) {
 		max_sessions = -1;
 	}

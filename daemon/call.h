@@ -444,9 +444,6 @@ struct call {
 };
 
 struct callmaster_config {
-	int			kernelfd;
-	int			kernelid;
-
 	/* everything below protected by config_lock */
 	rwlock_t		config_lock;
 	int			max_sessions;

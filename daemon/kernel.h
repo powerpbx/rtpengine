@@ -20,17 +20,26 @@ struct re_address;
 
 
 
-int kernel_create_table(unsigned int);
-int kernel_open_table(unsigned int);
+struct kernel_interface {
+	unsigned int table;
+	int fd;
+	int is_open;
+	int is_wanted;
+};
+extern struct kernel_interface kernel;
 
-int kernel_add_stream(int, struct rtpengine_target_info *, int);
-int kernel_del_stream(int, const struct re_address *);
-GList *kernel_list(unsigned int);
 
-unsigned int kernel_add_call(int fd, const char *id);
-int kernel_del_call(int fd, unsigned int);
 
-unsigned int kernel_add_intercept_stream(int fd, unsigned int call_idx, const char *id);
+int kernel_setup_table(unsigned int);
+
+int kernel_add_stream(struct rtpengine_target_info *, int);
+int kernel_del_stream(const struct re_address *);
+GList *kernel_list();
+
+unsigned int kernel_add_call(const char *id);
+int kernel_del_call(unsigned int);
+
+unsigned int kernel_add_intercept_stream(unsigned int call_idx, const char *id);
 
 
 

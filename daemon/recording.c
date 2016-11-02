@@ -571,14 +571,13 @@ static int append_meta_chunk(struct recording *recording, const char *buf, unsig
 
 static void proc_init(struct call *call) {
 	struct recording *recording = call->recording;
-	struct callmaster *cm = call->callmaster;
 
 	recording->proc.call_idx = UNINIT_IDX;
-	if (cm->conf.kernelid < 0 || cm->conf.kernelfd < 0) {
+	if (!kernel.is_open) {
 		ilog(LOG_WARN, "Call recording through /proc interface requested, but kernel table not open");
 		return;
 	}
-	recording->proc.call_idx = kernel_add_call(cm->conf.kernelfd, recording->meta_prefix);
+	recording->proc.call_idx = kernel_add_call(recording->meta_prefix);
 	if (recording->proc.call_idx == UNINIT_IDX) {
 		ilog(LOG_ERR, "Failed to add call to kernel recording interface: %s", strerror(errno));
 		return;
@@ -606,13 +605,11 @@ static void sdp_after_proc(struct recording *recording, struct iovec *sdp_iov, i
 }
 
 static void finish_proc(struct call *call) {
-	struct callmaster *cm = call->callmaster;
 	struct recording *recording = call->recording;
-	// XXX these checks are redundant. globalize into a struct
-	if (cm->conf.kernelid < 0 || cm->conf.kernelfd < 0)
+	if (!kernel.is_open)
 		return;
 	if (recording->proc.call_idx != UNINIT_IDX)
-		kernel_del_call(cm->conf.kernelfd, recording->proc.call_idx);
+		kernel_del_call(recording->proc.call_idx);
 	unlink(recording->meta_filepath);
 }
 
@@ -622,12 +619,11 @@ static void init_stream_proc(struct packet_stream *stream) {
 
 static void setup_stream_proc(struct packet_stream *stream) {
 	struct call *call = stream->call;
-	struct callmaster *cm = call->callmaster;
 	struct recording *recording = call->recording;
 
 	if (!recording)
 		return;
-	if (cm->conf.kernelfd < 0 || cm->conf.kernelid < 0)
+	if (!kernel.is_open)
 		return;
 	if (stream->recording.proc.stream_idx != UNINIT_IDX)
 		return;
@@ -639,8 +635,7 @@ static void setup_stream_proc(struct packet_stream *stream) {
 			stream->component,
 			(PS_ISSET(stream, RTCP) && !PS_ISSET(stream, RTP)) ? "RTCP" : "RTP",
 			stream->unique_id);
-	stream->recording.proc.stream_idx = kernel_add_intercept_stream(cm->conf.kernelfd,
-			recording->proc.call_idx, stream_id);
+	stream->recording.proc.stream_idx = kernel_add_intercept_stream(recording->proc.call_idx, stream_id);
 	if (stream->recording.proc.stream_idx == UNINIT_IDX) {
 		ilog(LOG_ERR, "Failed to add stream to kernel recording interface: %s", strerror(errno));
 		return;
@@ -665,7 +660,7 @@ static void dump_packet_proc(struct recording *recording, struct packet_stream *
 	unsigned int pkt_len = fake_ip_header(remsg->data, stream, s);
 	pkt_len += sizeof(*remsg);
 
-	int ret = write(stream->call->callmaster->conf.kernelfd, pkt, pkt_len);
+	int ret = write(kernel.fd, pkt, pkt_len);
 	if (ret < 0)
 		ilog(LOG_ERR, "Failed to submit packet to kernel intercepted stream: %s", strerror(errno));
 }

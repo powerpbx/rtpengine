@@ -859,7 +859,6 @@ static int __rtp_stats_pt_sort(const void *ap, const void *bp) {
 void kernelize(struct packet_stream *stream) {
 	struct rtpengine_target_info reti;
 	struct call *call = stream->call;
-	struct callmaster *cm = call->callmaster;
 	struct packet_stream *sink = NULL;
 	const char *nk_warn_msg;
 
@@ -867,10 +866,10 @@ void kernelize(struct packet_stream *stream) {
 		return;
 	if (call->recording != NULL && !selected_recording_method->kernel_support)
 		return;
-	if (cm->conf.kernelid < 0)
+	if (!kernel.is_wanted)
 		goto no_kernel;
 	nk_warn_msg = "interface to kernel module not open";
-	if (cm->conf.kernelfd < 0)
+	if (!kernel.is_open)
 		goto no_kernel_warn;
 	if (!PS_ISSET(stream, RTP))
 		goto no_kernel;
@@ -953,7 +952,7 @@ void kernelize(struct packet_stream *stream) {
 
 	recording_stream_kernel_info(stream, &reti);
 
-	kernel_add_stream(cm->conf.kernelfd, &reti, 0);
+	kernel_add_stream(&reti, 0);
 	PS_SET(stream, KERNELIZED);
 
 	return;
@@ -974,9 +973,9 @@ void __unkernelize(struct packet_stream *p) {
 	if (PS_ISSET(p, NO_KERNEL_SUPPORT))
 		return;
 
-	if (p->call->callmaster->conf.kernelfd >= 0) {
+	if (kernel.is_open) {
 		__re_address_translate_ep(&rea, &p->selected_sfd->socket.local);
-		kernel_del_stream(p->call->callmaster->conf.kernelfd, &rea);
+		kernel_del_stream(&rea);
 	}
 
 	PS_CLEAR(p, KERNELIZED);
