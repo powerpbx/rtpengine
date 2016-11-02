@@ -35,8 +35,6 @@
 
 
 #define die(x...) do {									\
-	fprintf(stderr, x);								\
-	fprintf(stderr, "\n");								\
 	ilog(LOG_CRIT, x);								\
 	exit(-1);									\
 } while(0)
@@ -472,6 +470,7 @@ static void options(int *argc, char ***argv) {
 static void daemonize(void) {
 	if (fork())
 		_exit(0);
+	write_log = (write_log_t *) syslog;
 	stdin = freopen("/dev/null", "r", stdin);
 	stdout = freopen("/dev/null", "w", stdout);
 	stderr = freopen("/dev/null", "w", stderr);
@@ -565,16 +564,14 @@ static void create_everything(struct main_context *ctx) {
 	if (table < 0)
 		goto no_kernel;
 	if (kernel_create_table(table)) {
-		fprintf(stderr, "FAILED TO CREATE KERNEL TABLE %i, KERNEL FORWARDING DISABLED\n", table);
-		ilog(LOG_CRIT, "FAILED TO CREATE KERNEL TABLE %i, KERNEL FORWARDING DISABLED\n", table);
+		ilog(LOG_CRIT, "FAILED TO CREATE KERNEL TABLE %i, KERNEL FORWARDING DISABLED", table);
 		if (no_fallback)
 			exit(-1);
 		goto no_kernel;
 	}
 	kfd = kernel_open_table(table);
 	if (kfd == -1) {
-		fprintf(stderr, "FAILED TO OPEN KERNEL TABLE %i, KERNEL FORWARDING DISABLED\n", table);
-		ilog(LOG_CRIT, "FAILED TO OPEN KERNEL TABLE %i, KERNEL FORWARDING DISABLED\n", table);
+		ilog(LOG_CRIT, "FAILED TO OPEN KERNEL TABLE %i, KERNEL FORWARDING DISABLED", table);
 		if (no_fallback)
 			exit(-1);
 		goto no_kernel;

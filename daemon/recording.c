@@ -114,9 +114,8 @@ found:
 		spooldir[path_len-1] = '\0';
 	}
 	if (!_rm_ret(create_spool_dir, spooldir)) {
-		// XXX replace fprintf with ilog
-		fprintf(stderr, "Error while setting up spool directory \"%s\".\n", spooldir);
-		fprintf(stderr, "Please run `mkdir %s` and start rtpengine again.\n", spooldir);
+		ilog(LOG_ERR, "Error while setting up spool directory \"%s\".", spooldir);
+		ilog(LOG_ERR, "Please run `mkdir %s` and start rtpengine again.", spooldir);
 		exit(-1);
 	}
 }
@@ -126,17 +125,17 @@ static int check_create_dir(const char *dir, const char *desc, int creat) {
 
 	if (stat(dir, &info) != 0) {
 		if (!creat) {
-			fprintf(stderr, "%s directory \"%s\" does not exist.\n", desc, dir);
+			ilog(LOG_WARN, "%s directory \"%s\" does not exist.", desc, dir);
 			return FALSE;
 		}
-		fprintf(stdout, "Creating %s directory \"%s\".\n", desc, dir);
+		ilog(LOG_INFO, "Creating %s directory \"%s\".", desc, dir);
 		if (mkdir(dir, 0777) == 0)
 			return TRUE;
-		fprintf(stdout, "Failed to create %s directory \"%s\": %s\n", desc, dir, strerror(errno));
+		ilog(LOG_ERR, "Failed to create %s directory \"%s\": %s", desc, dir, strerror(errno));
 		return FALSE;
 	}
 	if(!S_ISDIR(info.st_mode)) {
-		fprintf(stderr, "%s file exists, but \"%s\" is not a directory.\n", desc, dir);
+		ilog(LOG_ERR, "%s file exists, but \"%s\" is not a directory.", desc, dir);
 		return FALSE;
 	}
 	return TRUE;
