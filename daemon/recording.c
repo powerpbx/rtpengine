@@ -29,16 +29,16 @@ static char *meta_setup_file(struct recording *recording);
 static int pcap_create_spool_dir(const char *dirpath);
 static void pcap_init(struct call *);
 static void sdp_after_pcap(struct recording *, struct iovec *sdp_iov, int iovcnt,
-		       unsigned int str_len, enum call_opmode opmode);
+		       unsigned int str_len, struct call_monologue *, enum call_opmode opmode);
 static void dump_packet_pcap(struct recording *recording, struct packet_stream *sink, const str *s);
 static void finish_pcap(struct call *);
 static void response_pcap(struct recording *, bencode_item_t *);
 
 // proc methods
 static void proc_init(struct call *);
-static void sdp_before_proc(struct recording *, const str *, enum call_opmode);
+static void sdp_before_proc(struct recording *, const str *, struct call_monologue *, enum call_opmode);
 static void sdp_after_proc(struct recording *, struct iovec *sdp_iov, int iovcnt,
-		       unsigned int str_len, enum call_opmode opmode);
+		       unsigned int str_len, struct call_monologue *, enum call_opmode opmode);
 static void meta_chunk_proc(struct recording *, const char *, const str *);
 static void finish_proc(struct call *);
 static void dump_packet_proc(struct recording *recording, struct packet_stream *sink, const str *s);
@@ -280,7 +280,7 @@ static char *meta_setup_file(struct recording *recording) {
  * Write out a block of SDP to the metadata file.
  */
 static void sdp_after_pcap(struct recording *recording, struct iovec *sdp_iov, int iovcnt,
-		       unsigned int str_len, enum call_opmode opmode)
+		       unsigned int str_len, struct call_monologue *ml, enum call_opmode opmode)
 {
 	FILE *meta_fp = recording->pcap.meta_fp;
 	if (!meta_fp)
@@ -591,17 +591,19 @@ static void proc_init(struct call *call) {
 	append_meta_chunk_s(recording, recording->meta_prefix, "PARENT");
 }
 
-static void sdp_before_proc(struct recording *recording, const str *sdp, enum call_opmode opmode)
+static void sdp_before_proc(struct recording *recording, const str *sdp, struct call_monologue *ml,
+		enum call_opmode opmode)
 {
+	append_meta_chunk_str(recording, &ml->tag, "TAG %u", ml->unique_id);
 	append_meta_chunk_str(recording, sdp,
-			"SDP before %s", get_opmode_text(opmode));
+			"SDP from %u before %s", ml->unique_id, get_opmode_text(opmode));
 }
 
 static void sdp_after_proc(struct recording *recording, struct iovec *sdp_iov, int iovcnt,
-		       unsigned int str_len, enum call_opmode opmode)
+		       unsigned int str_len, struct call_monologue *ml, enum call_opmode opmode)
 {
 	append_meta_chunk_iov(recording, sdp_iov, iovcnt, str_len,
-			"SDP after %s", get_opmode_text(opmode));
+			"SDP from %u after %s", ml->unique_id, get_opmode_text(opmode));
 }
 
 static void finish_proc(struct call *call) {
@@ -618,8 +620,12 @@ static void init_stream_proc(struct packet_stream *stream) {
 }
 
 static void setup_stream_proc(struct packet_stream *stream) {
+	struct call_media *media = stream->media;
+	struct call_monologue *ml = media->monologue;
 	struct call *call = stream->call;
 	struct recording *recording = call->recording;
+	char buf[128];
+	int len;
 
 	if (!recording)
 		return;
@@ -628,20 +634,22 @@ static void setup_stream_proc(struct packet_stream *stream) {
 	if (stream->recording.proc.stream_idx != UNINIT_IDX)
 		return;
 
-	char stream_id[128];
-	// XXX include tag from/to
-	snprintf(stream_id, sizeof(stream_id), "media-%u-component-%u-%s-id-%u",
-			stream->media->index,
-			stream->component,
+	len = snprintf(buf, sizeof(buf), "TAG %u MEDIA %u COMPONENT %u FLAGS %u",
+			ml->unique_id, media->index, stream->component,
+			stream->ps_flags);
+	append_meta_chunk(recording, buf, len, "STREAM %u details", stream->unique_id);
+
+	len = snprintf(buf, sizeof(buf), "tag-%u-media-%u-component-%u-%s-id-%u",
+			ml->unique_id, media->index, stream->component,
 			(PS_ISSET(stream, RTCP) && !PS_ISSET(stream, RTP)) ? "RTCP" : "RTP",
 			stream->unique_id);
-	stream->recording.proc.stream_idx = kernel_add_intercept_stream(recording->proc.call_idx, stream_id);
+	stream->recording.proc.stream_idx = kernel_add_intercept_stream(recording->proc.call_idx, buf);
 	if (stream->recording.proc.stream_idx == UNINIT_IDX) {
 		ilog(LOG_ERR, "Failed to add stream to kernel recording interface: %s", strerror(errno));
 		return;
 	}
 	ilog(LOG_DEBUG, "kernel stream idx is %u", stream->recording.proc.stream_idx);
-	append_meta_chunk_s(recording, stream_id, "STREAM");
+	append_meta_chunk(recording, buf, len, "STREAM %u interface", stream->unique_id);
 }
 
 static void dump_packet_proc(struct recording *recording, struct packet_stream *stream, const str *s) {

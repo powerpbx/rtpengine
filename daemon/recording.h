@@ -21,6 +21,7 @@ struct packet_stream;
 struct call;
 enum call_opmode;
 struct rtpengine_target_info;
+struct call_monologue;
 
 
 struct recording_pcap {
@@ -65,8 +66,9 @@ struct recording_method {
 	int (*create_spool_dir)(const char *);
 	void (*init_struct)(struct call *);
 
-	void (*sdp_before)(struct recording *, const str *, enum call_opmode);
-	void (*sdp_after)(struct recording *, struct iovec *, int, unsigned int, enum call_opmode);
+	void (*sdp_before)(struct recording *, const str *, struct call_monologue *, enum call_opmode);
+	void (*sdp_after)(struct recording *, struct iovec *, int, unsigned int, struct call_monologue *,
+			enum call_opmode);
 	void (*meta_chunk)(struct recording *, const char *, const str *);
 
 	void (*dump_packet)(struct recording *, struct packet_stream *sink, const str *s);

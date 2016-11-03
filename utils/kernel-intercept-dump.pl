@@ -66,8 +66,11 @@ sub handle_change {
 		if ($key =~ /^(CALL-ID|PARENT)$/) {
 			$mf->{$key} = $val;
 		}
-		elsif ($key eq 'STREAM') {
-			open_stream($mf, $val);
+		elsif ($key =~ /^STREAM (\d+) interface$/) {
+			open_stream($mf, $val, $1);
+		}
+		elsif ($key =~ /^STREAM (\d+) details$/) {
+			stream_details($mf, $val, $1);
 		}
 	}
 }
@@ -83,21 +86,42 @@ sub handle_delete {
 	}
 
 	delete($mf->{streams});
+	delete($mf->{streams_id});
 	delete($metafiles{$fn});
 }
 
 
+sub get_stream_by_id {
+	my ($mf, $id) = @_;
+	my $ref = ($mf->{streams_id}->[$id] //= { metafile => $mf, id => $id });
+	return $ref;
+}
+
 sub open_stream {
-	my ($mf, $stream) = @_;
+	my ($mf, $stream, $id) = @_;
 	print("opening $stream for $mf->{'CALL-ID'}\n");
 	my $fd;
 	sysopen($fd, '/proc/rtpengine/0/calls/' . $mf->{PARENT} . '/' . $stream, O_RDONLY | O_NONBLOCK) or return;
-	my $ref = { name => $stream, fh => $fd, metafile => $mf };
+	my $ref = get_stream_by_id($mf, $id);
+	$ref->{name} = $stream;
+	$ref->{fh} = $fd;
 	$ref->{watcher} = AnyEvent->io(fh => $fd, poll => 'r', cb => sub { stream_read($mf, $ref) });
 	$ref->{pcap} = pcap_open_dead(DLT_RAW, 65535);
 	$ref->{dumper} = pcap_dump_open($ref->{pcap}, $mf->{PARENT} . '-' . $stream . '.pcap');
 	$mf->{streams}->{$stream} = $ref;
+	$mf->{streams_id}->[$id] = $ref;
 	print("opened for reading $stream for $mf->{'CALL-ID'}\n");
+}
+
+sub stream_details {
+	my ($mf, $val, $id) = @_;
+	my $ref = get_stream_by_id($mf, $id);
+	my @details = $val =~ /(\w+) (\d+)/g;
+	while (@details) {
+		my $k = shift(@details);
+		my $v = shift(@details);
+		$ref->{$k} = $v;
+	}
 }
 
 sub close_stream {
