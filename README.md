@@ -849,6 +849,10 @@ Optionally included keys are:
 		Forces *rtpengine* to retain its local ports during a signalling exchange even when the
 		remote endpoint changes its port.
 
+	- `record call`
+
+		Identical to setting `record call` to `on` (see below).
+
 
 * `replace`
 
@@ -1022,19 +1026,18 @@ Optionally included keys are:
 		Negates the respective option. This is useful if one of the session parameters was offered by
 		an SDES endpoint, but it should not be offered on the far side if this endpoint also speaks SDES.
 
-* `record-call`
+* `record call`
 
-	Contains either the string "yes" or the string "no". This tells the rtpengine
+	Contains one of the strings `yes`, `no`, `on` or `off`. This tells the rtpengine
 	whether or not to record the call to PCAP files. If the call is recorded, it
 	will generate PCAP files for each stream and a metadata file for each call.
 	Note that rtpengine *will not* force itself into the media path, and other
 	flags like `ICE=force` may be necessary to ensure the call is recorded.
 
-
 	See the `--recording-dir` option above.
 
-	Note that this is not a duplication of the `start_recording` message. If calls
-	are being kernelized, then they cannot be recorded. The `start_recording`
+	Note that this is not a duplication of the `start recording` message. If calls
+	are being kernelized, then they cannot be recorded. The `start recording`
 	message does not have a way to prevent a call from being kernelized, so we need
 	to use this flag when we send an `offer` or `answer` message.
 

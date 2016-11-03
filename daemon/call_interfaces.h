@@ -30,6 +30,8 @@ struct sdp_ng_flags {
 	str direction[2];
 	sockfamily_t *address_family;
 	int tos;
+	str record_call_str;
+	str metadata;
 	int asymmetric:1,
 	    unidirectional:1,
 	    trust_address:1,
@@ -47,6 +49,7 @@ struct sdp_ng_flags {
 	    media_handover:1,
 	    dtls_passive:1,
 	    reset:1,
+	    record_call:1,
 	    dtls_off:1,
 	    sdes_off:1,
 	    sdes_unencrypted_srtp:1,

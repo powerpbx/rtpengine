@@ -554,6 +554,8 @@ static void call_ng_process_flags(struct sdp_ng_flags *out, bencode_item_t *inpu
 				ng_sdes_option(out, it, 5);
 			else if (!bencode_strcmp(it, "port-latching"))
 				out->port_latching = 1;
+			else if (!bencode_strcmp(it, "record-call"))
+				out->record_call = 1;
 			else
 				ilog(LOG_WARN, "Unknown flag encountered: '"BENCODE_FORMAT"'",
 						BENCODE_FMT(it));
@@ -640,13 +642,15 @@ static void call_ng_process_flags(struct sdp_ng_flags *out, bencode_item_t *inpu
 	if (bencode_get_alt(input, "address-family", "address family", &out->address_family_str))
 		out->address_family = get_socket_family_rfc(&out->address_family_str);
 	out->tos = bencode_dictionary_get_integer(input, "TOS", 256);
+	bencode_get_alt(input, "record-call", "record call", &out->record_call_str);
+	bencode_dictionary_get_str(input, "metadata", &out->metadata);
 }
 
 static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster *m,
 		bencode_item_t *output, enum call_opmode opmode, const char* addr,
 		const endpoint_t *sin)
 {
-	str sdp, fromtag, totag = STR_NULL, callid, viabranch, recordcall = STR_NULL, metadata = STR_NULL;
+	str sdp, fromtag, totag = STR_NULL, callid, viabranch;
 	char *errstr;
 	GQueue parsed = G_QUEUE_INIT;
 	GQueue streams = G_QUEUE_INIT;
@@ -732,10 +736,9 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	chopper = sdp_chopper_new(&sdp);
 	bencode_buffer_destroy_add(output->buffer, (free_func_t) sdp_chopper_destroy, chopper);
 
-	bencode_dictionary_get_str(input, "record-call", &recordcall);
-	if (recordcall.s) {
-		detect_setup_recording(call, recordcall);
-	}
+	detect_setup_recording(call, &flags.record_call_str);
+	if (flags.record_call)
+		recording_start(call);
 
 	ret = monologue_offer_answer(monologue, &streams, &flags);
 	if (!ret)
@@ -749,10 +752,9 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 		meta_write_sdp_after(recording, sdp_iov, chopper->iov_num, chopper->str_len,
 			       monologue, opmode);
 
-		bencode_dictionary_get_str(input, "metadata", &metadata);
-		if (metadata.len) {
-			call_str_cpy(call, &recording->metadata, &metadata);
-			recording_meta_chunk(recording, "METADATA", &metadata);
+		if (flags.metadata.len) {
+			call_str_cpy(call, &recording->metadata, &flags.metadata);
+			recording_meta_chunk(recording, "METADATA", &flags.metadata);
 		}
 
 		recording_response(recording, output);

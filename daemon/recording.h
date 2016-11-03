@@ -100,6 +100,7 @@ extern const struct recording_method *selected_recording_method;
  */
 void recording_fs_init(const char *spooldir, const char *method);
 
+
 /**
  *
  * Controls the setting of recording variables on a `struct call *`.
@@ -110,7 +111,11 @@ void recording_fs_init(const char *spooldir, const char *method);
  *
  * Returns a boolean for whether or not the call is being recorded.
  */
-int detect_setup_recording(struct call *call, str recordcall);
+void detect_setup_recording(struct call *call, const str *recordcall);
+
+void recording_start(struct call *call);
+void recording_stop(struct call *call);
+
 
 /**
  * Create a call metadata file in a temporary location.

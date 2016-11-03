@@ -179,6 +179,35 @@ static int pcap_create_spool_dir(const char *spoolpath) {
 	return spool_good;
 }
 
+// lock must be held
+void recording_start(struct call *call) {
+	if (call->recording) // already active
+		return;
+
+	if (!spooldir) {
+		ilog(LOG_ERR, "Call recording requested, but no spool directory configured");
+		return;
+	}
+	ilog(LOG_NOTICE, "Turning on call recording.");
+
+	call->recording = g_slice_alloc0(sizeof(struct recording));
+	struct recording *recording = call->recording;
+	recording->escaped_callid = g_uri_escape_string(call->callid.s, NULL, 0);
+	const int rand_bytes = 8;
+	char rand_str[rand_bytes * 2 + 1];
+	rand_hex_str(rand_str, rand_bytes);
+	if (asprintf(&recording->meta_prefix, "%s-%s", recording->escaped_callid, rand_str) < 0)
+		abort();
+	_rm(init_struct, call);
+}
+void recording_stop(struct call *call) {
+	if (!call->recording)
+		return;
+
+	ilog(LOG_NOTICE, "Turning off call recording.");
+	recording_finish(call);
+}
+
 /**
  *
  * Controls the setting of recording variables on a `struct call *`.
@@ -189,47 +218,21 @@ static int pcap_create_spool_dir(const char *spoolpath) {
  *
  * Returns a boolean for whether or not the call is being recorded.
  */
-int detect_setup_recording(struct call *call, str recordcall) {
-	if (!str_cmp(&recordcall, "yes")) {
-		if (call->recording) // already active
-			return TRUE;
+void detect_setup_recording(struct call *call, const str *recordcall) {
+	if (!recordcall || !recordcall->s)
+		return;
 
-		if (!spooldir) {
-			ilog(LOG_ERR, "Call recording requested, but no spool directory configured");
-			return FALSE;
-		}
-		ilog(LOG_NOTICE, "Turning on call recording.");
-
-		call->recording = g_slice_alloc0(sizeof(struct recording));
-		struct recording *recording = call->recording;
-		recording->escaped_callid = g_uri_escape_string(call->callid.s, NULL, 0);
-		const int rand_bytes = 8;
-		char rand_str[rand_bytes * 2 + 1];
-		rand_hex_str(rand_str, rand_bytes);
-		if (asprintf(&recording->meta_prefix, "%s-%s", recording->escaped_callid, rand_str) < 0)
-			abort();
-		_rm(init_struct, call);
-
-		return TRUE;
-	}
-
-	if (!str_cmp(&recordcall, "no")) {
-		if (!call->recording)
-			return FALSE;
-
-		ilog(LOG_NOTICE, "Turning off call recording.");
-		recording_finish(call);
-	} else {
-		ilog(LOG_INFO, "\"record-call\" flag "STR_FORMAT" is invalid flag.", STR_FMT(&recordcall));
-	}
-	return call->recording ? TRUE : FALSE;
+	if (!str_cmp(recordcall, "yes") || !str_cmp(recordcall, "on"))
+		recording_start(call);
+	else if (!str_cmp(recordcall, "no") || !str_cmp(recordcall, "off"))
+		recording_stop(call);
+	else
+		ilog(LOG_INFO, "\"record-call\" flag "STR_FORMAT" is invalid flag.", STR_FMT(recordcall));
 }
 
 static void pcap_init(struct call *call) {
 	struct recording *recording = call->recording;
 
-	//recording->recording_pd = NULL;
-	//recording->recording_pdumper = NULL;
 	// Wireshark starts at packet index 1, so we start there, too
 	recording->pcap.packet_num = 1;
 	mutex_init(&recording->pcap.recording_lock);
