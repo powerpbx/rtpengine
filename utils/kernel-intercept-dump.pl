@@ -10,17 +10,25 @@ use Errno qw(EINTR EIO EAGAIN EWOULDBLOCK :POSIX);
 use Net::Pcap;
 use Time::HiRes;
 
+my $COMBINE = 1;
+# possible values:
+# 0: don't combine any streams. each stream gets written to its own pcap file
+# 1: combine all streams of one call into one pcap file
+
 my $i = new Linux::Inotify2 or die;
 $i->blocking(0);
 
 $i->watch('/var/spool/rtpengine', IN_CLOSE_WRITE | IN_DELETE, \&handle_inotify) or die;
 my $i_w = AnyEvent->io(fh => $i->fileno, poll => 'r', cb => sub { $i->poll });
 
+setup();
+
 AnyEvent::Loop::run();
 
 exit;
 
 my %metafiles;
+my %callbacks;
 
 sub handle_inotify {
 	my ($e) = @_;
@@ -73,12 +81,16 @@ sub handle_change {
 			stream_details($mf, $val, $1);
 		}
 	}
+
+	cb('call_setup', $mf);
 }
 
 sub handle_delete {
 	my ($e, $fn, $mf) = @_;
 
 	print("handling delete on $fn\n");
+
+	cb('call_close', $mf);
 
 	for my $sn (keys(%{$mf->{streams}})) {
 		my $ref = $mf->{streams}->{$sn};
@@ -106,8 +118,7 @@ sub open_stream {
 	$ref->{name} = $stream;
 	$ref->{fh} = $fd;
 	$ref->{watcher} = AnyEvent->io(fh => $fd, poll => 'r', cb => sub { stream_read($mf, $ref) });
-	$ref->{pcap} = pcap_open_dead(DLT_RAW, 65535);
-	$ref->{dumper} = pcap_dump_open($ref->{pcap}, $mf->{PARENT} . '-' . $stream . '.pcap');
+	cb('stream_setup', $ref, $mf);
 	$mf->{streams}->{$stream} = $ref;
 	$mf->{streams_id}->[$id] = $ref;
 	print("opened for reading $stream for $mf->{'CALL-ID'}\n");
@@ -131,8 +142,7 @@ sub close_stream {
 	delete($ref->{watcher});
 	my $mf = $ref->{metafile};
 	delete($mf->{streams}->{$ref->{name}});
-	pcap_dump_close($ref->{dumper});
-	pcap_close($ref->{pcap});
+	cb('stream_close', $ref);
 	print("closed $ref->{name}\n");
 }
 
@@ -156,9 +166,7 @@ sub stream_read {
 		else {
 			# $ret > 0
 			#print("$ret bytes read from $ref->{name} for $mf->{'CALL-ID'}\n");
-			my $hdr = { len => $ret, caplen => $ret };
-			tvsec_now($hdr);
-			pcap_dump($ref->{dumper}, $hdr, $buf);
+			cb('packet', $ref, $mf, $buf, $ret);
 			next;
 		}
 
@@ -173,4 +181,80 @@ sub tvsec_now {
 	my @now = Time::HiRes::gettimeofday();
 	$h->{tv_sec} = $now[0];
 	$h->{tv_usec} = $now[1];
+}
+
+sub setup {
+	if ($COMBINE == 0) {
+		$callbacks{stream_setup} = \&stream_pcap;
+		$callbacks{stream_close} = \&stream_pcap_close;
+		$callbacks{packet} = \&stream_packet,
+	}
+	elsif ($COMBINE == 1) {
+		$callbacks{call_setup} = \&call_pcap;
+		$callbacks{call_close} = \&call_pcap_close;
+		$callbacks{packet} = \&call_packet,
+	}
+}
+sub cb {
+	my ($name, @args) = @_;
+	my $fn = $callbacks{$name};
+	$fn or return;
+	return $fn->(@args);
+}
+
+
+sub dump_open {
+	my ($hash, $name) = @_;
+	$hash->{pcap} = pcap_open_dead(DLT_RAW, 65535);
+	$hash->{dumper} = pcap_dump_open($hash->{pcap}, $name);
+}
+sub dump_close {
+	my ($hash) = @_;
+	pcap_dump_close($hash->{dumper});
+	pcap_close($hash->{pcap});
+	delete($hash->{dumper});
+	delete($hash->{pcap});
+}
+sub dump_packet {
+	my ($hash, $buf, $len) = @_;
+	if (!$hash->{dumper}) {
+		print("discarding packet (dumper not open) - $hash->{name}\n");
+		return;
+	}
+	my $hdr = { len => $len, caplen => $len };
+	tvsec_now($hdr);
+	pcap_dump($hash->{dumper}, $hdr, $buf);
+}
+
+# COMBINE 0 functions
+sub stream_pcap {
+	my ($ref, $mf) = @_;
+	dump_open($ref, $mf->{PARENT} . '-' . $ref->{name} . '.pcap');
+}
+sub stream_pcap_close {
+	my ($ref) = @_;
+	dump_close($ref);
+}
+sub stream_packet {
+	my ($ref, $mf, $buf, $ret) = @_;
+	dump_packet($ref, $buf, $ret);
+}
+
+# COMBINE 1 functions
+sub call_pcap {
+	my ($mf) = @_;
+
+	$mf->{pcap} and return;
+	$mf->{PARENT} or return;
+
+	print("opening pcap for $mf->{PARENT}\n");
+	dump_open($mf, $mf->{PARENT} . '.pcap');
+}
+sub call_pcap_close {
+	my ($mf) = @_;
+	dump_close($mf);
+}
+sub call_packet {
+	my ($ref, $mf, $buf, $ret) = @_;
+	dump_packet($mf, $buf, $ret);
 }
