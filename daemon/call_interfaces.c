@@ -1098,3 +1098,24 @@ const char *call_list_ng(bencode_item_t *input, struct callmaster *m, bencode_it
 
 	return NULL;
 }
+
+
+const char *call_start_recording_ng(bencode_item_t *input, struct callmaster *m, bencode_item_t *output) {
+	str callid;
+	struct call *call;
+
+	if (!bencode_dictionary_get_str(input, "call-id", &callid))
+		return "No call-id in message";
+	call = call_get_opmode(&callid, m, OP_OTHER);
+	if (!call)
+		return "Unknown call-id";
+
+	recording_start(call);
+
+	rwlock_unlock_w(&call->master_lock);
+	obj_put(call);
+
+	bencode_dictionary_add_string(output, "result", "ok");
+
+	return NULL;
+}

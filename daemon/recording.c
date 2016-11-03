@@ -199,6 +199,17 @@ void recording_start(struct call *call) {
 	if (asprintf(&recording->meta_prefix, "%s-%s", recording->escaped_callid, rand_str) < 0)
 		abort();
 	_rm(init_struct, call);
+
+	// if recording has been turned on after initial call setup, we must walk
+	// through all related objects and initialize the recording stuff. if this
+	// function is called right at the start of the call, all of the following
+	// is essentially a no-op
+	GList *l;
+	for (l = call->streams.head; l; l = l->next) {
+		struct packet_stream *ps = l->data;
+		recording_setup_stream(ps);
+		__unkernelize(ps);
+	}
 }
 void recording_stop(struct call *call) {
 	if (!call->recording)
