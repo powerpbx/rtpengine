@@ -65,6 +65,8 @@ enum transport_protocol_index {
 	PROTO_UDP_TLS_RTP_SAVP,
 	PROTO_UDP_TLS_RTP_SAVPF,
 	PROTO_UDPTL,
+
+	__PROTO_LAST,
 };
 
 enum xmlrpc_format {

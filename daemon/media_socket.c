@@ -124,7 +124,7 @@ static const struct streamhandler __sh_savpf2savp = {
 
 /* ********** */
 
-static const struct streamhandler *__sh_matrix_in_rtp_avp[] = {
+static const struct streamhandler * const __sh_matrix_in_rtp_avp[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= &__sh_noop,
 	[PROTO_RTP_AVPF]		= &__sh_noop,
 	[PROTO_RTP_SAVP]		= &__sh_avp2savp,
@@ -133,7 +133,7 @@ static const struct streamhandler *__sh_matrix_in_rtp_avp[] = {
 	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_avp2savp,
 	[PROTO_UDPTL]			= &__sh_noop,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_avpf[] = {
+static const struct streamhandler * const __sh_matrix_in_rtp_avpf[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= &__sh_avpf2avp,
 	[PROTO_RTP_AVPF]		= &__sh_noop,
 	[PROTO_RTP_SAVP]		= &__sh_avpf2savp,
@@ -142,7 +142,7 @@ static const struct streamhandler *__sh_matrix_in_rtp_avpf[] = {
 	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_avp2savp,
 	[PROTO_UDPTL]			= &__sh_noop,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_savp[] = {
+static const struct streamhandler * const __sh_matrix_in_rtp_savp[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= &__sh_savp2avp,
 	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
 	[PROTO_RTP_SAVP]		= &__sh_noop,
@@ -151,7 +151,7 @@ static const struct streamhandler *__sh_matrix_in_rtp_savp[] = {
 	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_noop,
 	[PROTO_UDPTL]			= &__sh_noop,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_savpf[] = {
+static const struct streamhandler * const __sh_matrix_in_rtp_savpf[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= &__sh_savpf2avp,
 	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
 	[PROTO_RTP_SAVP]		= &__sh_savpf2savp,
@@ -160,7 +160,7 @@ static const struct streamhandler *__sh_matrix_in_rtp_savpf[] = {
 	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_noop,
 	[PROTO_UDPTL]			= &__sh_noop,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_savp_recrypt[] = {
+static const struct streamhandler * const __sh_matrix_in_rtp_savp_recrypt[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= &__sh_savp2avp,
 	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
 	[PROTO_RTP_SAVP]		= &__sh_savp2savp,
@@ -169,7 +169,7 @@ static const struct streamhandler *__sh_matrix_in_rtp_savp_recrypt[] = {
 	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_savp2savp,
 	[PROTO_UDPTL]			= &__sh_noop,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_savpf_recrypt[] = {
+static const struct streamhandler * const __sh_matrix_in_rtp_savpf_recrypt[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= &__sh_savpf2avp,
 	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
 	[PROTO_RTP_SAVP]		= &__sh_savpf2savp,
@@ -178,7 +178,7 @@ static const struct streamhandler *__sh_matrix_in_rtp_savpf_recrypt[] = {
 	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_savp2savp,
 	[PROTO_UDPTL]			= &__sh_noop,
 };
-static const struct streamhandler *__sh_matrix_noop[] = {
+static const struct streamhandler * const __sh_matrix_noop[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= &__sh_noop,
 	[PROTO_RTP_AVPF]		= &__sh_noop,
 	[PROTO_RTP_SAVP]		= &__sh_noop,
@@ -190,7 +190,7 @@ static const struct streamhandler *__sh_matrix_noop[] = {
 
 /* ********** */
 
-static const struct streamhandler **__sh_matrix[] = {
+static const struct streamhandler * const * const __sh_matrix[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= __sh_matrix_in_rtp_avp,
 	[PROTO_RTP_AVPF]		= __sh_matrix_in_rtp_avpf,
 	[PROTO_RTP_SAVP]		= __sh_matrix_in_rtp_savp,
@@ -200,7 +200,7 @@ static const struct streamhandler **__sh_matrix[] = {
 	[PROTO_UDPTL]			= __sh_matrix_noop,
 };
 /* special case for DTLS as we can't pass through SRTP<>SRTP */
-static const struct streamhandler **__sh_matrix_recrypt[] = {
+static const struct streamhandler * const * const __sh_matrix_recrypt[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= __sh_matrix_in_rtp_avp,
 	[PROTO_RTP_AVPF]		= __sh_matrix_in_rtp_avpf,
 	[PROTO_RTP_SAVP]		= __sh_matrix_in_rtp_savp_recrypt,
@@ -1006,8 +1006,8 @@ void unkernelize(struct packet_stream *ps) {
 
 /* must be called with call->master_lock held in R, and in->in_lock held */
 static void determine_handler(struct packet_stream *in, const struct packet_stream *out) {
-	const struct streamhandler **sh_pp, *sh;
-	const struct streamhandler ***matrix;
+	const struct streamhandler * const *sh_pp, *sh;
+	const struct streamhandler * const * const *matrix;
 
 	if (in->handler)
 		return;
@@ -1021,6 +1021,8 @@ static void determine_handler(struct packet_stream *in, const struct packet_stre
 
 	matrix = __sh_matrix;
 	if (MEDIA_ISSET(in->media, DTLS) || MEDIA_ISSET(out->media, DTLS))
+		matrix = __sh_matrix_recrypt;
+	else if (in->call->recording)
 		matrix = __sh_matrix_recrypt;
 	else if (in->media->protocol->srtp && out->media->protocol->srtp
 			&& in->selected_sfd && out->selected_sfd

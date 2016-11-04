@@ -209,6 +209,7 @@ void recording_start(struct call *call) {
 		struct packet_stream *ps = l->data;
 		recording_setup_stream(ps);
 		__unkernelize(ps);
+		ps->handler = NULL;
 	}
 }
 void recording_stop(struct call *call) {
