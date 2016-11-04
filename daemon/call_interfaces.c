@@ -778,7 +778,6 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 
 	bencode_dictionary_add_iovec(output, "sdp", sdp_iov,
 		chopper->iov_num, chopper->str_len);
-	bencode_dictionary_add_string(output, "result", "ok");
 
 	errstr = NULL;
 out:
@@ -853,7 +852,6 @@ const char *call_delete_ng(bencode_item_t *input, struct callmaster *m, bencode_
 		bencode_dictionary_add_string(output, "warning", "Call-ID not found or tags didn't match");
 	}
 
-	bencode_dictionary_add_string(output, "result", "ok");
 	return NULL;
 }
 
@@ -1073,7 +1071,6 @@ const char *call_query_ng(bencode_item_t *input, struct callmaster *m, bencode_i
 	bencode_dictionary_get_str(input, "from-tag", &fromtag);
 	bencode_dictionary_get_str(input, "to-tag", &totag);
 
-	bencode_dictionary_add_string(output, "result", "ok");
 	ng_call_stats(call, &fromtag, &totag, output, NULL);
 	rwlock_unlock_w(&call->master_lock);
 	obj_put(call);
@@ -1091,7 +1088,6 @@ const char *call_list_ng(bencode_item_t *input, struct callmaster *m, bencode_it
 	if (limit < 0) {
 		return "invalid limit, must be >= 0";
 	}
-	bencode_dictionary_add_string(output, "result", "ok");
 	calls = bencode_dictionary_add_list(output, "calls");
 
 	ng_list_calls(m, calls, limit);
@@ -1114,8 +1110,6 @@ const char *call_start_recording_ng(bencode_item_t *input, struct callmaster *m,
 
 	rwlock_unlock_w(&call->master_lock);
 	obj_put(call);
-
-	bencode_dictionary_add_string(output, "result", "ok");
 
 	return NULL;
 }
