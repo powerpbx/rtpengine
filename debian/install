@@ -1,0 +1,7 @@
+daemon/rtpengine                        /usr/sbin/
+iptables-extension/libxt_RTPENGINE.so   /lib/xtables/
+perl/*                                  /usr/share/perl5/
+utils/rtpengine-ctl                     /usr/sbin/
+utils/rtpengine-ng-client               /usr/sbin/
+kernel-module/*                         /usr/src/rtpengine-4.4.0/
+debian/dkms.conf                        /usr/src/rtpengine-4.4.0/

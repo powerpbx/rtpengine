@@ -1,8 +1,9 @@
-Source: ngcp-rtpengine
+Source: rtpengine
 Section: net
 Priority: extra
 Maintainer: Sipwise Development Team <support@sipwise.com>
 Build-Depends: debhelper (>= 5),
+               dh-systemd,
                iptables-dev (>= 1.4),
                libcurl4-openssl-dev | libcurl4-gnutls-dev | libcurl3-openssl-dev | libcurl3-gnutls-dev,
                libevent-dev (>= 2.0),
@@ -16,92 +17,19 @@ Build-Depends: debhelper (>= 5),
 Standards-Version: 3.9.7
 Homepage: http://sipwise.com/
 
-Package: ngcp-rtpengine-daemon
+Package: rtpengine
 Architecture: any
-Recommends: ngcp-rtpengine-utils
-Suggests: ngcp-system-tools
-Depends: ${misc:Depends},
-         ${shlibs:Depends}
-Conflicts: ngcp-mediaproxy-ng-daemon,
-           ngcp-rtpengine-redis1
-Replaces: ngcp-mediaproxy-ng-daemon,
-          ngcp-rtpengine-redis1
+Depends: ${misc:Depends}, ${shlibs:Depends},  dkms (>= 1.95)
+Conflicts: ngcp-mediaproxy-ng-daemon, ngcp-rtpengine-redis1
+Replaces: ngcp-mediaproxy-ng-daemon, ngcp-rtpengine-redis1
 Description: Proxy for RTP and media streams used in NGCP, userspace part.
  This daemon handles the first stages of proxying media streams and talks to
  the kernel part of the proxy for eventual high-performance packet forwarding.
-
-Package: ngcp-rtpengine-iptables
-Architecture: any
-Depends: ${misc:Depends},
-         ${shlibs:Depends}
-Conflicts: ngcp-mediaproxy-ng-iptables
-Replaces: ngcp-mediaproxy-ng-iptables
-Description: IPtables extension module for the kernel-space NGCP media proxy.
- Provides the IPtables extension needed to configure the mediaproxy rule.
-
-Package: ngcp-rtpengine
-Architecture: all
-Depends: ngcp-rtpengine-daemon (>= ${source:Version}),
-         ngcp-rtpengine-iptables (>= ${source:Version}),
-         ngcp-rtpengine-kernel-dkms (>= ${source:Version})
-Conflicts: ngcp-mediaproxy-ng
-Replaces: ngcp-mediaproxy-ng
-Description: NGCP RTP/media proxy - meta package.
- This is a meta package for easy installation of all three parts of the NGCP
- media proxy. It will install the user-space daemon, the kernel-space IPtables
- module, and the IPtables extension module.
-
-Package: ngcp-rtpengine-kernel-source
-Architecture: all
-Depends: debhelper (>= 5),
-         module-assistant,
-         ${misc:Depends}
-Conflicts: ngcp-mediaproxy-ng-kernel-source
-Replaces: ngcp-mediaproxy-ng-kernel-source
-Description: IPtables kernel module for the NGCP media proxy - source.
- Provides the kernel-space part of the NGCP media proxy for high-
- performance packet forwarding.
- This package contains the source to be built with module-assistant or
- kernel-package.
-
-Package: ngcp-rtpengine-kernel-dkms
-Architecture: all
-Suggests: ngcp-system-tools
-Depends: dkms (>= 1.95),
-         ${misc:Depends}
-Conflicts: ngcp-mediaproxy-ng-kernel-dkms
-Replaces: ngcp-mediaproxy-ng-kernel-dkms
-Description: IPtables kernel module for the NGCP media proxy - DKMS.
- Provides the kernel-space part of the NGCP media proxy for high-
- performance packet forwarding.
- This package contains the source to be built with dkms.
-
-Package: ngcp-rtpengine-dbg
-Architecture: any
-Section: debug
-Depends: ngcp-rtpengine-daemon (= ${binary:Version}),
-         ngcp-rtpengine-iptables (= ${binary:Version}),
-         ${misc:Depends}
-Conflicts: ngcp-mediaproxy-ng-dbg
-Replaces: ngcp-mediaproxy-ng-dbg
-Description: debugging symbols for ngcp-rtpengine
- The ngcp-rtpengine daemon handles the first stages of proxying media streams and talks to
- the kernel part of the proxy for eventual high-performance packet forwarding.
  .
- ngcp-rtpengine-iptables provides the IPtables extension needed
- to configure the mediaproxy rule.
+ This package is based on templates from Sipwise ngcp-rtpengine, merging all the
+ packages into a single one and adding systemd unit files. 
  .
- This package contains the debugging symbols for ngcp-rtpengine-daemon
- and ngcp-rtpengine-iptables
+ Default configuration is designed to work with the rest of the components of
+ ivozprovider.
+ .
 
-Package: ngcp-rtpengine-utils
-Architecture: all
-Depends: libbencode-perl,
-         libcrypt-rijndael-perl,
-         libdigest-hmac-perl,
-         libio-socket-inet6-perl,
-         libio-socket-ip-perl,
-         libsocket6-perl,
-         netcat-openbsd | netcat
-Description: Scripts and Perl modules for NGCP rtpengine
- Scripts and Perl modules for NGCP rtpengine

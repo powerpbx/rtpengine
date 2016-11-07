@@ -1,3 +1,9 @@
+rtpengine (4.4.0) UNREALEASED; urgency=medium
+
+  * rtpengine packaged for ivozprovider
+
+ -- Irontec IvozProvider Team <vozip@irotnec.com>  Thu, 05 May 2016 19:33:26 +0100
+
 ngcp-rtpengine (4.4.0.0+0~mr4.4.0.0) unstable; urgency=medium
 
   [ Lucian Balaceanu ]
