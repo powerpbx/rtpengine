@@ -1,2 +1,5 @@
 # Interface to bind rtpengine to
-IP=EDIT
+IP=127.0.0.1
+
+# Additional command line options
+EXTRA_OPTS="-m 17001 -M 19000"
