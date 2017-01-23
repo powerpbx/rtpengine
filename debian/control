@@ -1,7 +1,7 @@
-Source: rtpengine
+Source: ivozprovider-rtpengine
 Section: net
 Priority: extra
-Maintainer: Sipwise Development Team <support@sipwise.com>
+Maintainer: Debian VoIP Team <pkg-voip-maintainers@lists.alioth.debian.org>
 Build-Depends: debhelper (>= 5),
                dh-systemd,
                iptables-dev (>= 1.4),
@@ -17,7 +17,7 @@ Build-Depends: debhelper (>= 5),
 Standards-Version: 3.9.7
 Homepage: http://sipwise.com/
 
-Package: rtpengine
+Package: ivozprovider-rtpengine
 Architecture: any
 Depends: ${misc:Depends}, ${shlibs:Depends},  dkms (>= 1.95)
 Conflicts: ngcp-mediaproxy-ng-daemon, ngcp-rtpengine-redis1

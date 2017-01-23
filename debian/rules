@@ -2,12 +2,16 @@
 
 export DEB_BUILD_HARDENING=1
 
-# Install systemd unit files
+override_dh_auto_test:
+
 override_dh_systemd_enable:
-	dh_systemd_enable --name=rtpproxy
+	dh_systemd_enable --name rtpengine
 
 override_dh_systemd_start:
-	dh_systemd_start --no-restart-after-upgrade --no-start --name=rtpproxy
+	dh_systemd_start --name rtpengine --no-restart-on-upgrade
+
+override_dh_installinit:
+	dh_installinit --name rtpengine --noscripts --no-restart-on-upgrade --no-start
 
 override_dh_install:
 	${MAKE} -C iptables-extension
