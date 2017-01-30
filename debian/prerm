@@ -1,12 +1,8 @@
-#!/bin/sh
-
-set -e
+#!/bin/bash
 
 package=rtpengine
 name=rtpengine
-
-version=`dpkg-query -W -f='${Version}' "$package" \
-        |rev|cut -d- -f2-|rev|cut -d':' -f2|tr -d "\n"`
+version=4.4.0
 
 # make sure it's not running
 if [ -x /etc/init.d/rtpengine ] ; then

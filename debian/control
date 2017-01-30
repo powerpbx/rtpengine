@@ -19,7 +19,7 @@ Homepage: http://sipwise.com/
 
 Package: ivozprovider-rtpengine
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends},  dkms (>= 1.95)
+Pre-Depends: ${misc:Depends}, ${shlibs:Depends},  dkms (>= 1.95) , linux-headers-3.16.0-4-all
 Conflicts: ngcp-mediaproxy-ng-daemon, ngcp-rtpengine-redis1
 Replaces: ngcp-mediaproxy-ng-daemon, ngcp-rtpengine-redis1
 Description: Proxy for RTP and media streams used in NGCP, userspace part.
