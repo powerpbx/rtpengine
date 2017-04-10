@@ -6,7 +6,7 @@ version=4.4.0
 
 # make sure it's not running
 if [ -x /etc/init.d/rtpengine ] ; then
-	invoke-rc.d rtpengine stop || true
+	systemctl rtpengine stop || true
 fi
 
 dkms remove -m "$name" -v "$version" --all || true

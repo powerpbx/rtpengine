@@ -10,7 +10,7 @@ ExecStart=/usr/sbin/rtpengine --table=0 --interface=${IP} --listen-ng=127.0.0.1:
 ExecStartPost=/sbin/iptables -I INPUT -p udp -j RTPENGINE --id 0
 ExecStopPost=/sbin/iptables -D INPUT -p udp -j RTPENGINE --id 0
 ExecStopPost=/bin/bash -c "/bin/echo del 0 > /proc/rtpengine/control"
-Restart=on-abort
+Restart=always
 
 [Install]
 WantedBy=multi-user.target
