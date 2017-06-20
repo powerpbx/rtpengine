@@ -22,7 +22,7 @@ Architecture: any
 Pre-Depends: ${misc:Depends}, ${shlibs:Depends},  dkms (>= 1.95) , linux-headers-3.16.0-4-all
 Conflicts: ngcp-mediaproxy-ng-daemon, ngcp-rtpengine-redis1
 Replaces: ngcp-mediaproxy-ng-daemon, ngcp-rtpengine-redis1
-Description: Proxy for RTP and media streams used in NGCP, userspace part.
+Description: IVOZ Provider - Proxy for RTP and media streams used in NGCP, userspace part.
  This daemon handles the first stages of proxying media streams and talks to
  the kernel part of the proxy for eventual high-performance packet forwarding.
  .
