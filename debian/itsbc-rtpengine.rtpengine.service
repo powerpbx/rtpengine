@@ -1,0 +1,14 @@
+[Unit]
+Description=RTPEngine Mediaproxy
+After=network.target
+
+[Service]
+Type=forking
+EnvironmentFile=/etc/default/rtpengine
+EnvironmentFile=/opt/irontec/itsbc/config/rtpengine/interfaces
+PIDFile=/var/run/rtpengine.pid
+ExecStart=/usr/sbin/rtpengine $INTERFACES --listen-ng=127.0.0.1:22222 --listen-cli=127.0.0.1:9900 --xmlrpc-format=1 --tos=184 --pidfile=/var/run/rtpengine.pid --no-fallback --sip-source $EXTRA_OPTS
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

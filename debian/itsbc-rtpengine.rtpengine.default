@@ -1,0 +1,8 @@
+# Interface to bind rtpengine to
+IP=127.0.0.1
+
+# Default interface list
+INTERFACES=""
+
+# Additional command line options
+EXTRA_OPTS="-m 17001 -M 19000"

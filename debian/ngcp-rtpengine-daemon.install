@@ -1,2 +1,0 @@
-daemon/rtpengine /usr/sbin/
-etc/rtpengine.sample.conf /etc/rtpengine/
