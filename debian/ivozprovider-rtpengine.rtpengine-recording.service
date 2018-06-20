@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 EnvironmentFile=/etc/default/rtpengine-recording
 PIDFile=/var/run/rtpengine-recording.pid
-ExecStart=/usr/sbin/rtpengine-recording -f -E --pidfile /var/run/rtpengine-recording.pid --spool-dir=${SPOOL_DIR} --output-dir=${OUTPUT_DIR} ${EXTRA_OPTS}
+ExecStart=/usr/sbin/rtpengine-recording -f -E --pidfile /var/run/rtpengine-recording.pid --spool-dir=${RECORDINGS_SPOOL} --output-dir=${RECORDINGS_DIR} --output-mixed ${EXTRA_OPTS}
 Restart=always
 
 [Install]

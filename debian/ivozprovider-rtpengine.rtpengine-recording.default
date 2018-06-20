@@ -1,8 +1,8 @@
 # Where rtpengine leaves recording data
-SPOOL_DIR=/var/spool/rtpengine/
+RECORDINGS_SPOOL=/var/spool/rtpengine/
 
 # Where files are moved after conversion has been done
-OUTPUT_DIR=/opt/irontec/ivozprovider/storage/ivozprovider_model_recordings.tmp
+RECORDINGS_DIR=/opt/irontec/ivozprovider/storage/ivozprovider_model_recordings.originalfile/
 
 # Extra optional command line arguments
 EXTRA_OPTS=
