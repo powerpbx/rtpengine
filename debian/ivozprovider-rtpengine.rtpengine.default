@@ -1,5 +1,11 @@
+# Control socket
+CONTROL_SOCK=127.0.0.1:22223
+
 # Interface to bind rtpengine to
-IP=127.0.0.1
+AUDIO_SOCK=127.0.0.1
+
+# Destination files for recordings
+RECORDINGS_SPOOL=/var/spool/rtpengine/
 
 # Additional command line options
-EXTRA_OPTS="-m 17001 -M 19000"
+EXTRA_OPTS="-m 13000 -M 19000"
