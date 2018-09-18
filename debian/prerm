@@ -11,4 +11,6 @@ fi
 
 dkms remove -m "$name" -v "$version" --all || true
 
+#DEBHELPER#
+
 :
