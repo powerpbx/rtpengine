@@ -57,13 +57,11 @@ static void meta_destroy(metafile_t *mf) {
 		close(mf->forward_fd);
 		mf->forward_fd = -1;
 	}
-	db_close_call(mf);
 }
 
 
 // mf is locked
 static void meta_stream_interface(metafile_t *mf, unsigned long snum, char *content) {
-	db_do_call(mf);
 	if (output_enabled) {
 		pthread_mutex_lock(&mf->mix_lock);
 		if (!mf->mix && output_mixed) {
@@ -71,7 +69,6 @@ static void meta_stream_interface(metafile_t *mf, unsigned long snum, char *cont
 			snprintf(buf, sizeof(buf), "%s-mix", mf->parent);
 			mf->mix_out = output_new(output_dir, buf);
 			mf->mix = mix_new();
-			db_do_stream(mf, mf->mix_out, "mixed", 0, 0);
 		}
 		pthread_mutex_unlock(&mf->mix_lock);
 	}
@@ -108,7 +105,6 @@ static void meta_rtp_payload_type(metafile_t *mf, unsigned long mnum, unsigned i
 // mf is locked
 static void meta_metadata(metafile_t *mf, char *content) {
 	mf->metadata = g_string_chunk_insert(mf->gsc, content);
-	db_do_call(mf);
 	if (forward_to)
 		start_forwarding_capture(mf, content);
 }

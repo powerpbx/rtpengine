@@ -121,7 +121,6 @@ got_fn:
 		goto err;
 
 done:
-	db_config_stream(output);
 	return 0;
 
 err:
@@ -159,7 +158,6 @@ void output_close(output_t *output) {
 	if (!output)
 		return;
 	output_shutdown(output);
-	db_close_stream(output);
 	encoder_free(output->encoder);
 	g_slice_free1(sizeof(*output), output);
 }

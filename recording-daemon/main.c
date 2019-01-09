@@ -12,7 +12,6 @@
 #include <libavutil/log.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <mysql.h>
 #include "log.h"
 #include "epoll.h"
 #include "inotify.h"
@@ -73,7 +72,6 @@ static void setup(void) {
 				die_errno("Failed to create output dir '%s'");
 		}
 	}
-	mysql_library_init(0, NULL, NULL);
 	signals();
 	metafile_setup();
 	epoll_setup();
@@ -129,7 +127,6 @@ static void cleanup(void) {
 	metafile_cleanup();
 	inotify_cleanup();
 	epoll_cleanup();
-	mysql_library_end();
 }
 
 
