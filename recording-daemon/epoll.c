@@ -3,6 +3,7 @@
 #include <glib.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <mysql.h>
 #include "log.h"
 #include "main.h"
 #include "garbage.h"
@@ -32,6 +33,7 @@ void epoll_del(int fd) {
 
 
 static void poller_thread_end(void *ptr) {
+	mysql_thread_end();
 }
 
 
@@ -41,6 +43,7 @@ void *poller_thread(void *ptr) {
 
 	dbg("poller thread %u running", me_num);
 
+	mysql_thread_init();
 
 	pthread_cleanup_push(poller_thread_end, NULL);
 
