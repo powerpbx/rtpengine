@@ -21,6 +21,7 @@ Build-Depends: debhelper (>= 5),
                libssl-dev (>= 1.0.1),
                libxmlrpc-c3-dev (>= 1.16.07) | libxmlrpc-core-c3-dev (>= 1.16.07),
                libxtables-dev,
+               libbcg729-dev,
                markdown,
                zlib1g-dev
 Standards-Version: 3.9.7
