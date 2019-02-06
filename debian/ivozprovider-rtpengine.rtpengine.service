@@ -1,6 +1,6 @@
 [Unit]
 Description=RTPEngine Mediaproxy
-After=network.target netfilter-persistent.service
+After=network.target netfilter-persistent.service firewalld.service
 
 [Service]
 Type=forking
